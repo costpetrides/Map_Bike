@@ -193,15 +193,19 @@ function chooseEndpoints(net, a, b) {
     idx, d: distanceMetres(p, v)
   })).sort((u, v) => u.d - v.d).slice(0, 10);
   const first = near(a), second = near(b);
-  if (first[0].d > 250 || second[0].d > 250) {
+  if (first[0].d > 150 || second[0].d > 150) {
     throw Error("One of the selected points is too far from a bicycle-accessible road.");
   }
+  // A disconnected street must not be mistaken for a valid route by snapping
+  // either point hundreds of metres away to a different component.
+  const aLimit = Math.min(150, first[0].d + 35);
+  const bLimit = Math.min(150, second[0].d + 35);
   let choice = null;
   for (const ai of first) {
-    if (ai.d > 250) continue;
+    if (ai.d > aLimit) continue;
     const reachable = reachableFrom(net, ai.idx);
     for (const bi of second) {
-      if (bi.d > 250 || ai.idx === bi.idx || !reachable[bi.idx]) continue;
+      if (bi.d > bLimit || ai.idx === bi.idx || !reachable[bi.idx]) continue;
       const penalty = ai.d + bi.d;
       if (!choice || penalty < choice.penalty) choice = { start: ai.idx, end: bi.idx, penalty };
     }
