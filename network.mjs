@@ -1,9 +1,10 @@
 import { assignNodeElevations } from "./elevation.mjs";
+import { getSmallAreaRoads, fallbackBounds } from "./osm-fallback.mjs";
 
+// Two independent providers. kumi.systems is the old name for private.coffee.
 const OVERPASS = [
   "https://overpass.private.coffee/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
-  "https://lz4.overpass-api.de/api/interpreter"
+  "https://overpass.openstreetmap.fr/api/interpreter"
 ];
 const elevationCache = new Map();
 const roadCache = new Map();
@@ -68,53 +69,71 @@ export function corridorSpec(a, b, marginMetres) {
 }
 
 async function requestRoads(corridor, signal, notify = () => {}) {
-  // Return only necessary tags on ways; node coordinates without node tags.
-  // Overpass poly avoids downloading unrelated streets in the box corners.
-  const query = `[out:json][timeout:25];way["highway"~"${ROAD_PATTERN}"](poly:"${corridor.poly}");out body qt;>;out skel qt;`;
+  const query = `[out:json][timeout:35];way["highway"~"${ROAD_PATTERN}"](poly:"${corridor.poly}");out body qt;>;out skel qt;`;
   const key = corridor.poly;
   if (roadCache.has(key)) {
-    notify("Reusing previously downloaded roads…");
+    notify("Reusing cached road network…");
     return roadCache.get(key);
   }
-  const winnerAbort = new AbortController();
-  const attempts = OVERPASS.map(async (url, index) => {
-    if (index > 0) {
-      await new Promise(resolve => setTimeout(resolve, 4000 * index));
-      if (signal?.aborted || winnerAbort.signal.aborted) throw Error("Request cancelled");
-    }
-    notify(index ? "Road server slow — trying alternate server…" : "Downloading local road corridor…");
-    const signals = [winnerAbort.signal, AbortSignal.timeout(16000)];
-    if (signal) signals.push(signal);
-    try {
-      // GET with encoded Overpass QL avoids some cross-origin POST failures
-      // in mobile browsers and is supported by the Overpass interpreter.
-      const requestUrl = `${url}?data=${encodeURIComponent(query)}`;
-      const response = await fetch(requestUrl, {
-        method: "GET",
-        signal: AbortSignal.any(signals)
-      });
-      if (!response.ok) throw Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      if (!Array.isArray(data.elements) || data.elements.length === 0) {
-        throw Error("No road data returned");
+  const localAbort = new AbortController();
+  const attempts = [];
+
+  const pause = ms => new Promise(resolve => setTimeout(resolve,ms));
+
+  // Delayed independent providers avoid a sudden burst of identical requests.
+  for (const [index, url] of OVERPASS.entries()) {
+    attempts.push((async () => {
+      if(index>0)await pause(5000*index);
+      if(localAbort.signal.aborted || signal?.aborted)throw Error("Request cancelled");
+      notify(index===0 ? "Querying roads from Overpass…" :
+        "First Overpass slow — trying a different data provider…");
+      const timeout = AbortSignal.timeout(34000);
+      const signals=[localAbort.signal,timeout];
+      if(signal)signals.push(signal);
+      try {
+        const response=await fetch(`${url}?data=${encodeURIComponent(query)}`,{
+          method:"GET",signal:AbortSignal.any(signals),cache:"no-store"
+        });
+        if(!response.ok)throw Error(`HTTP ${response.status}`);
+        const data=await response.json();
+        if(!Array.isArray(data.elements)||!data.elements.some(e=>e.type==="way"))
+          throw Error(data.remark || "No road ways in response");
+        if(data.remark && /runtime error|timed out|out of memory/i.test(data.remark))
+          throw Error(data.remark);
+        data.source=new URL(url).host;
+        return data;
+      } catch(error) {
+        if(signal?.aborted)throw Error("User cancelled loading");
+        if(timeout.aborted)throw Error(`${new URL(url).host}: timed out after 34 seconds`);
+        throw Error(`${new URL(url).host}: ${error.message||"network/CORS failure"}`);
       }
-      return data;
-    } catch (error) {
-      throw Error(`${new URL(url).host}: ${error.message}`);
-    }
-  });
+    })());
+  }
+
+  // Independent, strictly bounded fallback for small areas only. Never use
+  // the OSM editing API for large extracts; it is not a production data API.
+  if(fallbackBounds(corridor)) {
+    attempts.push((async () => {
+      await pause(9000);
+      if(localAbort.signal.aborted || signal?.aborted)throw Error("Request cancelled");
+      notify("Trying independent OpenStreetMap small-area fallback…");
+      try{return await getSmallAreaRoads(corridor,AbortSignal.any([localAbort.signal,...(signal?[signal]:[])]));}
+      catch(error){throw Error(`OSM small-area fallback: ${error.message}`);}
+    })());
+  }
   try {
-    const data = await Promise.any(attempts);
-    winnerAbort.abort();
-    if (!signal?.aborted) {
-      roadCache.set(key, data);
-      if (roadCache.size > MAX_ROAD_CACHE) roadCache.delete(roadCache.keys().next().value);
-    }
+    const data=await Promise.any(attempts);
+    localAbort.abort();
+    if(signal?.aborted)throw Error("Road loading cancelled");
+    notify(`Road data received from ${data.source||"OpenStreetMap"}`);
+    roadCache.set(key,data);
+    if(roadCache.size>MAX_ROAD_CACHE)roadCache.delete(roadCache.keys().next().value);
     return data;
-  } catch (error) {
-    const detail = error.errors?.map(e => e.message).join(" / ") || error.message;
-    if (signal?.aborted) throw Error("Road loading cancelled");
-    throw Error(`Road service unavailable or too slow. ${detail}. Please retry.`);
+  } catch(error) {
+    localAbort.abort();
+    if(signal?.aborted)throw Error("Road loading cancelled");
+    const errors=error.errors?.map(e=>e.message)||[error.message];
+    throw Error(`Road data providers failed: ${errors.join(" / ")}. Please retry later.`);
   }
 }
 
