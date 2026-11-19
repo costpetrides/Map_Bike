@@ -48,6 +48,20 @@ Run the solver and loader tests with:
 node --test tests/*.test.mjs
 ```
 
+### Location-aware data reduction
+
+The map does **not** download a fixed city-wide region. For each A–B pair it:
+
+1. Builds a four-corner polygon along A–B with a narrow **125–320 m initial side margin**, based on direct separation (not on map zoom). This removes unrelated streets in the corners of large rectangular requests.
+2. Requests only road ways inside this polygon, with full tags for eligibility and minimal node geometry. Clips extraneous portions of long roads on the client.
+3. Tries larger margins (**2×, then 3.5×**) only if a legal A–B road connection cannot be found. It does *not* unnecessarily broaden the search when a local connection exists.
+4. Prunes graph portions unreachable in the permitted travel direction from A **before requesting elevations** or constructing the diffusion solver; other reachable branching streets remain.
+5. Caches up to four road responses (same search polygon) and previously requested DEM cells in memory, reducing repeat network requests.
+
+The narrow corridor is an **exploratory performance/coverage tradeoff**. It may omit longer detours and alternatives outside the corridor even when an in-corridor route exists. Accordingly, the simulation is not an exhaustive analysis of every possible A–B route. For a scientifically complete city-wide study, a wider user-controlled region or a boundary-aware expansion strategy is necessary.
+
+Endpoint snapping is restricted to nearby street nodes: a disconnected road hundreds of metres away cannot be silently substituted for B.
+
 ### Physical model and important qualifications
 
 The state evolves on the road network via a spatial finite-volume analogue of
