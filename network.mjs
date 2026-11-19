@@ -1,3 +1,4 @@
+import { assignNodeElevations } from "./elevation.mjs";
 
 const OVERPASS = [
   "https://overpass.private.coffee/api/interpreter",
@@ -230,65 +231,54 @@ export function pruneUnreachable(net) {
   return { nodes, edges, start: indices[net.start], end: indices[net.end] };
 }
 
-async function attachElevations(net, notify, signal) {
-  // ~130m sampling limits redundant DEM requests and makes small areas fast.
-  // Copernicus DEM data source is approximately 90m, so this is a
-  // deliberately coarse first-version approximation (not survey-grade).
-  const grouped = new Map();
-  for (let i = 0; i < net.nodes.length; i++) {
-    const node = net.nodes[i];
-    const qLat = Math.round(node.lat / 0.0012) * 0.0012;
-    const lonStep = 0.0012 / Math.max(0.2, Math.cos(node.lat * DEG));
-    const qLon = Math.round(node.lng / lonStep) * lonStep;
-    const key = `${qLat.toFixed(5)},${qLon.toFixed(5)}`;
-    if (!grouped.has(key)) grouped.set(key, { key, lat: qLat, lng: qLon, indices: [] });
-    grouped.get(key).indices.push(i);
-  }
-  const cells = [...grouped.values()];
-  if (cells.length > 900) throw Error("Too many elevation samples. Choose two closer points.");
-  const outstanding = [];
-  for (const cell of cells) {
-    if (elevationCache.has(cell.key)) {
-      for (const i of cell.indices) net.nodes[i].elevation = elevationCache.get(cell.key);
-    } else {
-      outstanding.push(cell);
+export function densifyRoadGraph(graph, maxSpacingMetres = 55) {
+  // Sample the road geometry at regular arc-length intervals so DEM slopes
+  // are not calculated only from distant junction endpoints.
+  const nodes = graph.nodes.slice();
+  const edges = [];
+  for (const edge of graph.edges) {
+    const count = Math.max(1, Math.ceil(edge.length / maxSpacingMetres));
+    if (count === 1) { edges.push(edge); continue; }
+    const shape = edge.shape.map(([lat, lng]) => ({lat, lng}));
+    const cumulative = [0];
+    for (let k = 1; k < shape.length; k++) {
+      cumulative.push(cumulative[k-1] + distanceMetres(shape[k-1], shape[k]));
+    }
+    const total = cumulative[cumulative.length - 1];
+    if (total < 0.01) { edges.push(edge); continue; }
+    let prev = edge.a, previousPos = [graph.nodes[edge.a].lat, graph.nodes[edge.a].lng];
+    let cursor = 1;
+    for (let k = 1; k <= count; k++) {
+      let targetIndex, position;
+      if (k === count) {
+        targetIndex = edge.b;
+        position = [graph.nodes[edge.b].lat, graph.nodes[edge.b].lng];
+      } else {
+        const target = total * k / count;
+        while (cursor < cumulative.length - 1 && cumulative[cursor] < target) cursor++;
+        const start = Math.max(0, cursor - 1);
+        const span = Math.max(1e-9, cumulative[cursor] - cumulative[start]);
+        const fraction = Math.max(0, Math.min(1, (target - cumulative[start]) / span));
+        const p = shape[start], q = shape[cursor];
+        const lat = p.lat + fraction * (q.lat - p.lat);
+        const lng = p.lng + fraction * (q.lng - p.lng);
+        targetIndex = nodes.length;
+        nodes.push({lat, lng, elevation:null});
+        position = [lat, lng];
+      }
+      edges.push({
+        a:prev, b:targetIndex, length:edge.length/count,
+        shape:[previousPos,position], forward:edge.forward, backward:edge.backward
+      });
+      prev = targetIndex;
+      previousPos = position;
     }
   }
-  if (!outstanding.length) {
-    notify(`Elevations loaded from cache · ${cells.length} samples`);
-    return;
-  }
-  notify(`Loading terrain elevations · 0 / ${outstanding.length} samples`);
-  const batches = [];
-  for (let i = 0; i < outstanding.length; i += 100) batches.push(outstanding.slice(i, i + 100));
-  let cursor = 0, complete = 0;
-  async function worker() {
-    while (cursor < batches.length) {
-      if (signal?.aborted) throw Error("Loading cancelled");
-      const batch = batches[cursor++];
-      const url = new URL("https://api.open-meteo.com/v1/elevation");
-      url.searchParams.set("latitude", batch.map(p => p.lat.toFixed(5)).join(","));
-      url.searchParams.set("longitude", batch.map(p => p.lng.toFixed(5)).join(","));
-      const signals = [AbortSignal.timeout(15000)];
-      if (signal) signals.push(signal);
-      const response = await fetch(url, { signal: AbortSignal.any(signals) });
-      if (!response.ok) throw Error(`Elevation service HTTP ${response.status}. Try again.`);
-      const result = await response.json();
-      if (!Array.isArray(result.elevation) || result.elevation.length !== batch.length) {
-        throw Error("Elevation data was incomplete.");
-      }
-      for (let j = 0; j < batch.length; j++) {
-        const elevation = result.elevation[j];
-        if (!Number.isFinite(elevation)) throw Error("Elevation data contains invalid values.");
-        elevationCache.set(batch[j].key, elevation);
-        for (const i of batch[j].indices) net.nodes[i].elevation = elevation;
-      }
-      complete += batch.length;
-      notify(`Loading terrain elevations · ${complete} / ${outstanding.length} samples`);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(3, batches.length) }, () => worker()));
+  if (nodes.length > 12000 || edges.length > 16000)
+    throw Error("Road network is too large for the prototype. Choose closer points.");
+  return {nodes, edges, start:graph.start, end:graph.end};
 }
+
 
 export async function loadNetwork(a, b, notify = () => {}, signal, onRoadsReady = () => {}) {
   const direct = distanceMetres(a, b);
@@ -307,7 +297,7 @@ export async function loadNetwork(a, b, notify = () => {}, signal, onRoadsReady 
     try {
       const candidate = fromOverpass(data, corridor);
       chooseEndpoints(candidate, a, b);
-      graph = pruneUnreachable(candidate);
+      graph = densifyRoadGraph(pruneUnreachable(candidate));
       break;
     } catch (error) {
       if (!/No bicycle-accessible roads|Could not connect A and B|too far from a bicycle-accessible road|A and B are not connected/i.test(error.message)) {
@@ -322,6 +312,6 @@ export async function loadNetwork(a, b, notify = () => {}, signal, onRoadsReady 
   if (signal?.aborted) throw Error("Road loading cancelled");
   notify(`Relevant connected roads · ${graph.edges.length} segments / ${graph.nodes.length} nodes`);
   onRoadsReady(graph);
-  await attachElevations(graph, notify, signal);
+  graph.elevationInfo = await assignNodeElevations(graph.nodes, notify, signal);
   return graph;
 }
