@@ -58,7 +58,7 @@ test("loads roads before elevation and reports progressive stages", async (t) =>
   assert.ok(elevationRequests >= 1);
   assert.ok(roadCallbackReceived);
   assert.ok(elevationStartedAfterRoadCallback);
-  assert.ok(messages.some(msg => msg.includes("elevations")));
+  assert.ok(messages.some(msg => /terrain|elevation/i.test(msg)));
   assert.ok(graph.nodes.every(node => node.elevation === 95));
   assert.notEqual(graph.start, graph.end);
 });
@@ -100,7 +100,7 @@ test("automatic corridor expansion retries when initial data lacks a road connec
     const url = String(requestUrl);
     if (url.includes("/api/interpreter")) {
       roadRequests++;
-      const query = String(options.body.get("data"));
+      const query = new URL(url).searchParams.get("data");
       assert.ok(query.includes('(poly:"'), "Road search should be bounded by a polygon");
       return { ok: true, json: async () => roadRequests === 1 ? disconnected : osmResponse };
     }
@@ -139,4 +139,26 @@ test("unreachable side components are pruned before DEM sampling", async () => {
   assert.equal(pruned.edges.length, 2);
   assert.equal(pruned.start, 0);
   assert.equal(pruned.end, 2);
+});
+
+
+test("road subdivision samples interior elevations without changing connectivity", async () => {
+  const { densifyRoadGraph } = await import("../network.mjs");
+  const network = {
+    nodes: [{lat:37.98,lng:23.73,elevation:null}, {lat:37.98,lng:23.732,elevation:null}],
+    edges: [{
+      a:0,b:1,length:180,forward:true,backward:false,
+      shape:[[37.98,23.73],[37.9801,23.731],[37.98,23.732]]
+    }],
+    start:0,end:1
+  };
+  const out=densifyRoadGraph(network,55);
+  assert.equal(out.start,0);
+  assert.equal(out.end,1);
+  assert.equal(out.edges.length,4);
+  assert.equal(out.nodes.length,5);
+  assert.ok(out.nodes.slice(2).every(node => Number.isFinite(node.lat) && node.elevation === null));
+  assert.ok(out.edges.every(edge => edge.forward && !edge.backward));
+  const total=out.edges.reduce((sum,e)=>sum+e.length,0);
+  assert.ok(Math.abs(total-180)<1e-9);
 });
