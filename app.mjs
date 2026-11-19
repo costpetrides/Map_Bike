@@ -294,7 +294,7 @@ $("load").addEventListener("click", async () => {
     $("elev-count").textContent = graph.elevationInfo.count.toLocaleString();
     $("elev-source").textContent = graph.elevationInfo.provider;
     resetSimulation();
-    status(`Ready: ${graph.edges.length.toLocaleString()} segments, ${graph.elevationInfo.count.toLocaleString()} DEM points. Start diffusion.`);
+    status(`Ready: ${graph.edges.length.toLocaleString()} segments from ${graph.roadSource}; ${graph.elevationInfo.count.toLocaleString()} DEM points. Start diffusion.`);
     map.fitBounds([a, b], { padding: [80, 80], maxZoom: 16 });
   } catch (error) {
     if (!loadingSignal.aborted) {
