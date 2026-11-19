@@ -87,7 +87,7 @@ async function requestRoads(corridor, signal, notify = () => {}) {
       if(localAbort.signal.aborted || signal?.aborted)throw Error("Request cancelled");
       notify(index===0 ? "Querying roads from Overpass…" :
         "First Overpass slow — trying a different data provider…");
-      const timeout = AbortSignal.timeout(34000);
+      const timeout = AbortSignal.timeout(45000);
       const signals=[localAbort.signal,timeout];
       if(signal)signals.push(signal);
       try {
@@ -104,7 +104,7 @@ async function requestRoads(corridor, signal, notify = () => {}) {
         return data;
       } catch(error) {
         if(signal?.aborted)throw Error("User cancelled loading");
-        if(timeout.aborted)throw Error(`${new URL(url).host}: timed out after 34 seconds`);
+        if(timeout.aborted)throw Error(`${new URL(url).host}: timed out after 45 seconds`);
         throw Error(`${new URL(url).host}: ${error.message||"network/CORS failure"}`);
       }
     })());
