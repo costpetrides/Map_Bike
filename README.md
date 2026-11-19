@@ -20,6 +20,17 @@ python3 -m http.server 8000
 
 Open http://localhost:8000 in your browser. Opening `index.html` as a `file://` URL may block ES modules.
 
+### Map appearance: Positron / Dark
+
+Use the **Positron** and **Dark** buttons above the map to change the basemap without restarting diffusion. Dark is the default and the choice is remembered locally when the browser allows localStorage. The simulated fluid uses a **blue-to-turquoise** intensity palette, while the inferred route remains amber.
+
+- Basemaps: [OpenFreeMap](https://openfreemap.org/quick_start/) vector styles \`positron\` and \`dark\`, rendered through MapLibre GL and its Leaflet adapter; no API key.
+- If MapLibre/WebGL or the vector tiles cannot load, the app retains the original OpenStreetMap raster layer and applies a light or dark, desaturated presentation as a fallback. The fallback resembles the selected style but is not the original Positron/Dark vector map.
+- Changing style only updates map presentation and road colours; the A/B points, downloaded network, elevation samples and diffusion state remain unchanged.
+- © OpenFreeMap; map data © OpenStreetMap contributors. Keep attribution visible.
+
+MapLibre and its Leaflet adapter are loaded from a version-pinned CDN; these are optional for the basemap and do not replace the app's Leaflet overlays. Tests: \`tests/map-style.test.mjs\`.
+
 ### How to use
 
 1. Click the map to set point **A**.
