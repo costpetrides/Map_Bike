@@ -30,6 +30,20 @@ Open http://localhost:8000 in your browser. Opening `index.html` as a `file://` 
 
 Select A or B again to change points. For this proof of concept they must be **80 metres to 2.2 km apart**. Large networks and public service outages may cause an explicit loading error.
 
+### Road API recovery (19 November 2026)
+
+The previous loader failed after 16 s on each public Overpass endpoint; its `overpass.kumi.systems` host was an alias of `overpass.private.coffee`, so it did not provide an independent backup.
+
+The current version:
+
+- Uses independent providers at `overpass.private.coffee` and `overpass.openstreetmap.fr`, started at different times to avoid a simultaneous surge.
+- Allows up to 34 s per request and explains whether a provider timed out, returned an HTTP error or failed at the network/CORS layer.
+- If the search is confined to a **very small** geographical region, attempts the independent OpenStreetMap API map endpoint as a last-resort fallback. Only roads and their referenced nodes are extracted from the XML, not buildings.
+- Cancels other pending requests when a valid response is obtained and reports which provider succeeded in the status panel.
+- Keeps the original narrow A–B corridor search, graph connectivity checks, road/elevation caching, and DEM sampling.
+
+**Important:** the public OpenStreetMap core API is primarily intended for map editing rather than repeated read-only extraction. This very small-area fallback is experimental and not a solution for high traffic, large distances or production deployment. A self-hosted extract service or hosted Overpass instance is required for robust long-term use. Public services may still fail or block cross-origin requests. No successful end-to-end Safari/online-API test has been confirmed.
+
 ### Faster road-data loading (November 2026)
 
 - Road queries now use a 16-second timeout per endpoint. If the first server has not finished after 4 seconds, an alternative endpoint starts without waiting for the first to time out. Requests that lose the race are cancelled.
