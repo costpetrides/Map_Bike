@@ -274,7 +274,7 @@ function pathRoads(path) {
     climb += Math.max(0, dz); drop += Math.max(0, -dz);
     length += edge.length;
     L.polyline(reverse ? [...edge.shape].reverse() : edge.shape, {
-      color: "#d48032", weight: 6, opacity: 0.92, interactive: false, lineCap: "round"
+      color: "#22C55E", weight: 6, opacity: 0.92, interactive: false, lineCap: "round"
     }).addTo(routeLayer);
   }
   return { length, climb, drop };
