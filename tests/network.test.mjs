@@ -112,8 +112,8 @@ test("automatic corridor expansion retries when initial data lacks a road connec
   };
   t.after(() => { globalThis.fetch = originalFetch; });
   const graph = await loadNetwork(
-    { lat: 37.976, lng: 23.739 },
-    { lat: 37.9778, lng: 23.741 },
+    { lat: 37.97602, lng: 23.73902 },
+    { lat: 37.97778, lng: 23.74098 },
     m => messages.push(m)
   );
   assert.ok(roadRequests >= 2);
