@@ -78,6 +78,8 @@ function invalidateGraph() {
   $("model-time").textContent = "—";
   $("elev-a").textContent = "—";
   $("elev-b").textContent = "—";
+  $("elev-count").textContent = "—";
+  $("elev-source").textContent = "—";
 }
 function placePoint(which, latlng, invalidate = true) {
   if (invalidate) invalidateGraph();
@@ -289,8 +291,10 @@ $("load").addEventListener("click", async () => {
     if (loadingSignal.aborted) return;
     $("elev-a").textContent = `${graph.nodes[graph.start].elevation.toFixed(0)} m`;
     $("elev-b").textContent = `${graph.nodes[graph.end].elevation.toFixed(0)} m`;
+    $("elev-count").textContent = graph.elevationInfo.count.toLocaleString();
+    $("elev-source").textContent = graph.elevationInfo.provider;
     resetSimulation();
-    status(`Ready: ${graph.nodes.length.toLocaleString()} nodes, ${graph.edges.length.toLocaleString()} road segments. Press Start diffusion.`);
+    status(`Ready: ${graph.edges.length.toLocaleString()} segments, ${graph.elevationInfo.count.toLocaleString()} DEM points. Start diffusion.`);
     map.fitBounds([a, b], { padding: [80, 80], maxZoom: 16 });
   } catch (error) {
     if (!loadingSignal.aborted) {
