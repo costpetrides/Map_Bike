@@ -1,5 +1,6 @@
 
 const OVERPASS = [
+  "https://overpass.private.coffee/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
   "https://overpass-api.de/api/interpreter"
 ];
@@ -67,7 +68,7 @@ function fromOverpass(data) {
   for (const el of data.elements) {
     if (el.type !== "way" || !eligible(el.tags || {})) continue;
     const nodes = (el.nodes || []).filter((id) => original.has(id));
-    if (nodes.length > 1) allWays.push({ nodes, tags: el.tags || {} });
+    if (nodes.length > 1) allWays.push({ nodes, tags: el.tags || {}, osmWayId: el.id });
   }
   const count = new Map();
   for (const way of allWays) {
@@ -98,7 +99,7 @@ function fromOverpass(data) {
       if (length > 0.5 && next !== anchor) {
         const a = getIndex(anchor), b = getIndex(next);
         if (a !== b) {
-          const key = `${Math.min(a, b)}:${Math.max(a, b)}`;
+          const key = `${way.osmWayId}:${Math.min(a, b)}:${Math.max(a, b)}`;
           if (!used.has(key)) {
             used.add(key);
             edges.push({ a, b, length, shape: shape.map(p => [p.lat, p.lng]), forward, backward });
