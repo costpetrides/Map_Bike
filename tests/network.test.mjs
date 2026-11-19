@@ -69,3 +69,74 @@ test("rejects too-close A/B points before making API calls", async () => {
     /at least 80 metres/
   );
 });
+
+
+test("adaptive corridor is local and expands geometrically around A–B", async () => {
+  const { corridorSpec } = await import("../network.mjs");
+  const a = { lat: 37.97600, lng: 23.73900 };
+  const b = { lat: 37.97920, lng: 23.74400 };
+  const narrow = corridorSpec(a, b, 125);
+  const wide = corridorSpec(a, b, 250);
+  assert.equal(narrow.poly.split(" ").length, 8); // four lat/lon pairs
+  assert.ok(narrow.contains(a));
+  assert.ok(narrow.contains(b));
+  assert.ok(wide.contains({ lat: 37.976, lng: 23.737 }));
+  assert.equal(narrow.contains({ lat: 37.990, lng: 23.760 }), false);
+  assert.ok(wide.marginMetres > narrow.marginMetres);
+});
+
+test("automatic corridor expansion retries when initial data lacks a road connection", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let roadRequests = 0;
+  const messages = [];
+  const disconnected = {
+    elements: [
+      ...sampleNodes,
+      { type: "way", id: 101, nodes: [1, 2], tags: { highway: "residential" } },
+      { type: "way", id: 102, nodes: [4, 5], tags: { highway: "residential" } }
+    ]
+  };
+  globalThis.fetch = async (requestUrl, options) => {
+    const url = String(requestUrl);
+    if (url.includes("/api/interpreter")) {
+      roadRequests++;
+      const query = String(options.body.get("data"));
+      assert.ok(query.includes('(poly:"'), "Road search should be bounded by a polygon");
+      return { ok: true, json: async () => roadRequests === 1 ? disconnected : osmResponse };
+    }
+    if (url.includes("/v1/elevation")) {
+      const count = new URL(url).searchParams.get("latitude").split(",").length;
+      return { ok: true, json: async () => ({ elevation: Array(count).fill(95) }) };
+    }
+    throw Error("Unexpected request");
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const graph = await loadNetwork(
+    { lat: 37.976, lng: 23.739 },
+    { lat: 37.9778, lng: 23.741 },
+    m => messages.push(m)
+  );
+  assert.ok(roadRequests >= 2);
+  assert.ok(messages.some(m => m.includes("expanding")));
+  assert.ok(graph.edges.length > 0);
+  assert.ok(graph.nodes.every(n => Number.isFinite(n.elevation)));
+});
+
+test("unreachable side components are pruned before DEM sampling", async () => {
+  const { pruneUnreachable } = await import("../network.mjs");
+  const g = {
+    nodes: Array.from({ length: 6 }, () => ({ elevation: null })),
+    edges: [
+      { a: 0, b: 1, forward: true, backward: true },
+      { a: 1, b: 2, forward: true, backward: true },
+      { a: 3, b: 4, forward: true, backward: true },
+      { a: 5, b: 1, forward: true, backward: false }
+    ],
+    start: 0, end: 2
+  };
+  const pruned = pruneUnreachable(g);
+  assert.equal(pruned.nodes.length, 3);
+  assert.equal(pruned.edges.length, 2);
+  assert.equal(pruned.start, 0);
+  assert.equal(pruned.end, 2);
+});
