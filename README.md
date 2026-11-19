@@ -1,4 +1,70 @@
-# Map_Bike — Fluid-Inspired Bicycle Route Optimisation
+# Map_Bike — Live Elevation-Driven Diffusion
+
+A browser prototype of nonlinear diffusion with downhill drift on actual roads. Choose two points A and B on a map and watch a virtual concentration front spread through an OpenStreetMap street network. The model does not include cyclist speed, rider effort or bicycle physics.
+
+## Launch the interactive app
+
+The interactive entry point is `index.html`. It works as a static website: no build step, API key or backend is required.
+
+**GitHub Pages (one-time setup by repository owner):** Go to **Settings → Pages → Build and deployment → Deploy from a branch**, select the **main** branch and the root folder, then Save. After GitHub Pages has deployed, the intended URL will be:
+
+https://costpetrides.github.io/Map_Bike/
+
+Until Pages is configured, use a local server:
+
+```bash
+git clone https://github.com/costpetrides/Map_Bike.git
+cd Map_Bike
+python3 -m http.server 8000
+```
+
+Open http://localhost:8000 in your browser. Opening `index.html` as a `file://` URL may block ES modules.
+
+### How to use
+
+1. Click the map to set point **A**.
+2. Click a second point to set **B**. Alternatively select the Athens example.
+3. Select **Load road network**. The app fetches permitted OpenStreetMap roads and 90 m terrain elevation samples from Open-Meteo / Copernicus.
+4. Press **Start diffusion**. The line colours update as the concentration spreads. Pause and resume, adjust animation speed, or reset.
+5. When the numerical concentration threshold at B is reached, the simulation pauses and highlights a heuristic predecessor trace (when one can be reconstructed).
+
+Select A or B again to change points. For this proof of concept they must be **80 metres to 2.2 km apart**. Large networks and public service outages may cause an explicit loading error.
+
+### Physical model and important qualifications
+
+The state evolves on the road network via a spatial finite-volume analogue of
+
+$$
+\partial_t c=\partial_s\left[D_0\partial_s(c^2)+\mu c\,\partial_s z\right].
+$$
+
+The sign of elevation grade biases the flow uphill or downhill. In the current solver, the source at A is a **replenished reservoir**, not a one-time pulse. Each road segment is spatially approximated by the downloaded graph and the numerical time is in **model units**.
+
+For visible arrival the prototype uses a **finite concentration threshold** at B. This is an operational detection rule, not the exact mathematical free-boundary contact. The orange trace is derived heuristically from predecessor fluxes: it is **not** a demonstrated shortest or fastest route. Before use as actual routing or any research claim, the solver requires mesh and timestep convergence checks, junction verification and further validation.
+
+**Data / access limitations:** OpenStreetMap road connectivity and bike access tags may be incomplete; elevation samples have 90 m resolution and do not capture every small local grade; public Overpass and elevation APIs can rate-limit requests. The map is a research experiment, **not navigation advice**. Open-Meteo's free public API has usage and licensing restrictions, particularly for commercial projects.
+
+### Files
+
+| File | Purpose |
+| --- | --- |
+| `index.html` | Leaflet interactive map and controls |
+| `app.css` | Responsive layout and visual styles |
+| `app.mjs` | Map point selection, animation, concentration overlay |
+| `network.mjs` | OpenStreetMap roads and elevation API calls |
+| `physics.mjs` | Explicit, mass-conservative nonlinear-diffusion approximation |
+| `tests/physics.test.mjs` | Signed-grade, mass-accounting, one-way and stopping tests |
+| `docs/MATHEMATICAL_MODEL.md` | PDE derivation, conditions and analytical benchmark |
+| `docs/RESEARCH.md` | Related scientific publications and research roadmap |
+
+Run the basic solver tests with:
+
+```bash
+node --test tests/physics.test.mjs
+```
+
+---
+
 
 ## Research question
 
