@@ -21,7 +21,7 @@ input[type=range]{accent-color:#97cbb0;width:100%;margin:12px 0 6px}.range-ends{
 .map-wrap{position:relative;flex:1;min-width:0}.map-wrap #map{position:absolute;inset:0;background:#e4e9e8}.map-topnote{position:absolute;top:19px;left:19px;z-index:450;display:flex;gap:9px;align-items:center;border-radius:7px;padding:10px 13px;background:#fff;color:#3a4d52;box-shadow:0 2px 15px #17272a1a;font-size:11px;font-weight:700;letter-spacing:.08em}
 .live-led{width:8px;height:8px;border-radius:50%;background:#8296a0}.live-led.is-active{background:#3ca878;box-shadow:0 0 0 4px #3ca87822}
 .map-key{display:flex;align-items:center;gap:9px;position:absolute;left:20px;bottom:22px;z-index:450;background:#ffffffeb;border:1px solid #e1e9e8;border-radius:9px;padding:12px 14px;color:#41575a;font-size:11px;box-shadow:0 2px 16px #17272a10;flex-wrap:wrap}
-.key-line{display:inline-block;width:20px;height:0;border-top:4px solid #9caab3}.key-line.active{border-color:#209b90}.key-line.route{border-color:#e19046}
+.key-line{display:inline-block;width:20px;height:0;border-top:4px solid #9caab3}.key-line.active{border-color:#209b90}.key-line.route{border-color:#22C55E}
 .leaflet-container{font:inherit!important}.leaflet-control-zoom{border:0!important;box-shadow:0 2px 10px #0002!important}.leaflet-control-zoom a{border-color:#e9eeee!important;color:#33484b!important}
 .leaflet-control-attribution{font-size:10px!important}
 .point-pin{border-radius:50%;display:grid;place-items:center;width:33px;height:33px;font-weight:800;font-size:13px;color:white;border:3px solid #fff;box-shadow:0 2px 8px #192b3090}.point-pin.a{background:#477a62}.point-pin.b{background:#c67b4b}
@@ -66,7 +66,7 @@ button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #9cdb
   background:linear-gradient(90deg,#2678ff,#1bafe8,#12dbc6);
 }
 .map-wrap[data-basemap="dark"] .key-line.inactive{border-color:#829aac}
-.map-wrap[data-basemap="dark"] .key-line.route{border-color:#e8a464}
+.map-wrap[data-basemap="dark"] .key-line.route{border-color:#22C55E}
 @media(max-width:650px){
   .basemap-switch{top:54px;left:12px;padding:3px}
   .basemap-switch button{min-height:29px;padding:6px 11px;font-size:11px}
