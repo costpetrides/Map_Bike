@@ -22,7 +22,7 @@ Open http://localhost:8000 in your browser. Opening `index.html` as a `file://` 
 
 ### Map appearance: Positron / Dark
 
-Use the **Positron** and **Dark** buttons above the map to change the basemap without restarting diffusion. Dark is the default and the choice is remembered locally when the browser allows localStorage. The simulated fluid uses a **blue-to-turquoise** intensity palette, while the inferred route remains amber.
+Use the **Positron** and **Dark** buttons above the map to change the basemap without restarting diffusion. Dark is the default and the choice is remembered locally when the browser allows localStorage. The simulated fluid uses a **blue-to-turquoise** intensity palette, while the inferred route is green.
 
 - Basemaps: [OpenFreeMap](https://openfreemap.org/quick_start/) vector styles \`positron\` and \`dark\`, rendered through MapLibre GL and its Leaflet adapter; no API key.
 - If MapLibre/WebGL or the vector tiles cannot load, the app retains the original OpenStreetMap raster layer and applies a light or dark, desaturated presentation as a fallback. The fallback resembles the selected style but is not the original Positron/Dark vector map.
@@ -113,7 +113,7 @@ $$
 
 The sign of elevation grade biases the flow uphill or downhill. In the current solver, the source at A is a **replenished reservoir**, not a one-time pulse. Each road segment is spatially approximated by the downloaded graph and the numerical time is in **model units**.
 
-For visible arrival the prototype uses a **finite concentration threshold** at B. This is an operational detection rule, not the exact mathematical free-boundary contact. The orange trace is derived heuristically from predecessor fluxes: it is **not** a demonstrated shortest or fastest route. Before use as actual routing or any research claim, the solver requires mesh and timestep convergence checks, junction verification and further validation.
+For visible arrival the prototype uses a **finite concentration threshold** at B. This is an operational detection rule, not the exact mathematical free-boundary contact. The green trace is derived heuristically from predecessor fluxes: it is **not** a demonstrated shortest or fastest route. Before use as actual routing or any research claim, the solver requires mesh and timestep convergence checks, junction verification and further validation.
 
 **Data / access limitations:** OpenStreetMap road connectivity and bike access tags may be incomplete; elevation samples have 90 m resolution and do not capture every small local grade; public Overpass and elevation APIs can rate-limit requests. The map is a research experiment, **not navigation advice**. Open-Meteo's free public API has usage and licensing restrictions, particularly for commercial projects.
 
