@@ -62,6 +62,22 @@ The narrow corridor is an **exploratory performance/coverage tradeoff**. It may 
 
 Endpoint snapping is restricted to nearby street nodes: a disconnected road hundreds of metres away cannot be silently substituted for B.
 
+### Terrain sampling on roads (November 2026)
+
+The elevation pipeline was revised after comparing the related `costpetrides/map-to-gpx` implementation (`website/src/lib/utils.ts`):
+
+- Start from **OpenStreetMap road edges only**; neither buildings nor a rectangular field of off-road solver cells are constructed.
+- Subdivide existing road geometries at approximately **55 m** intervals, retaining their legal connectivity and directions.
+- Download only the **Mapterhorn Terrarium-encoded DEM tiles** that contain at least one road sample (512×512 WebP tiles, zoom 12). Each tile covers surrounding buildings/terrain as raster imagery, but elevation values are read **only at sampled road coordinates**.
+- Use bilinear interpolation from nearby DEM pixels rather than rounding coordinates to ~130 m as before.
+- Reuse tiles in memory and through browser HTTP caching. When tile loading fails, request **exact road-point coordinates** from Open-Meteo as a fallback.
+- Reject incomplete/invalid elevation data; **do not silently substitute elevation zero**.
+- Display the actual DEM source and number of sampled road points in the sidebar.
+
+The reference implementation is https://github.com/costpetrides/map-to-gpx/blob/main/website/src/lib/utils.ts . The public Mapterhorn tile format and address are documented at https://mapterhorn.com/data-access/ .
+
+**Important scientific limitation:** DEM represents source-dependent terrain/surface elevations, not necessarily the height of road surfaces at bridges, tunnels, multi-level roads, or tightly built-up areas. The raster tiles include surrounding buildings even though the model **does not sample buildings as separate locations**. The current 55 m sample spacing and zoom-12 data may smooth smaller changes in grade; do not interpret them as surveyed roadway profiles.
+
 ### Physical model and important qualifications
 
 The state evolves on the road network via a spatial finite-volume analogue of
