@@ -30,6 +30,24 @@ Open http://localhost:8000 in your browser. Opening `index.html` as a `file://` 
 
 Select A or B again to change points. For this proof of concept they must be **80 metres to 2.2 km apart**. Large networks and public service outages may cause an explicit loading error.
 
+### Faster road-data loading (November 2026)
+
+- Road queries now use a 16-second timeout per endpoint. If the first server has not finished after 4 seconds, an alternative endpoint starts without waiting for the first to time out. Requests that lose the race are cancelled.
+- The street network appears on the map as soon as roads are downloaded, before all elevation data finishes loading.
+- Height samples are grouped on an approximate 130 m grid; requests contain at most 100 coordinate pairs (the elevation API limit) and up to three batches run concurrently.
+- Previously retrieved height samples are cached in browser memory for repeated point selections on the same page.
+- During loading, **Load road network** changes into **Cancel loading**. A failed or timed-out network request produces a visible error and lets you retry.
+
+The public data services are still external dependencies and may occasionally reject or rate-limit requests. No guaranteed live network availability is implied. DEM sampling is an exploratory approximation.
+
+### Tests
+
+Run the solver and loader tests with:
+
+```bash
+node --test tests/*.test.mjs
+```
+
 ### Physical model and important qualifications
 
 The state evolves on the road network via a spatial finite-volume analogue of
