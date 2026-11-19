@@ -8,8 +8,11 @@
   <title>Map_Bike · Live diffusion</title>
   <link rel="preconnect" href="https://tile.openstreetmap.org">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.22.0/dist/maplibre-gl.css">
   <link rel="stylesheet" href="./app.css">
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.22.0/dist/maplibre-gl.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
   <script type="module" src="./app.mjs"></script>
 </head>
 <body>
@@ -64,7 +67,11 @@
   <main class="map-wrap" aria-label="Live diffusion map">
     <div id="map"></div>
     <div class="map-topnote"><span class="live-led"></span><span id="map-mode">SELECT POINT A</span></div>
-    <div class="map-key" aria-label="Diffusion legend"><span class="key-line inactive"></span> Road <span class="key-line active"></span> Concentration <span class="key-line route"></span> Inferred trace</div>
+    <div class="basemap-switch" role="group" aria-label="Map style">
+      <button id="style-positron" type="button" aria-pressed="false">Positron</button>
+      <button id="style-dark" type="button" aria-pressed="true">Dark</button>
+    </div>
+    <div class="map-key" aria-label="Diffusion legend"><span class="key-line inactive"></span> Road <span class="key-line active"></span> <span>Fluid (blue → turquoise)</span> <span class="key-line route"></span> Inferred trace</div>
   </main>
 </div>
 <noscript>Enable JavaScript to use the map and simulation.</noscript>
