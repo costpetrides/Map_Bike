@@ -1,0 +1,61 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { initialiseSimulation, stepSimulation } from "../physics.mjs";
+
+function smallRoad(midElevation = 0, forward = true, backward = true) {
+  return {
+    nodes: [
+      { elevation: 0 }, { elevation: midElevation }, { elevation: midElevation }
+    ],
+    edges: [
+      { a: 0, b: 1, length: 50, forward, backward },
+      { a: 1, b: 2, length: 50, forward, backward }
+    ],
+    start: 0, end: 2
+  };
+}
+function runToContact(network, strength = 2, limit = 100000) {
+  const sim = initialiseSimulation(network, strength);
+  for (let i = 0; i < limit && !sim.arrived; i++) stepSimulation(sim);
+  return sim;
+}
+test("signed elevation changes the arrival order: downhill < flat < uphill", () => {
+  const down = runToContact(smallRoad(-5));
+  const flat = runToContact(smallRoad(0));
+  const up = runToContact(smallRoad(5));
+  assert.equal(down.arrived, true);
+  assert.equal(flat.arrived, true);
+  assert.equal(up.arrived, true);
+  assert.ok(down.time < flat.time, "downhill drift should assist the front");
+  assert.ok(flat.time < up.time, "uphill drift should oppose the front");
+});
+test("initial release and continuous A reservoir conserve accounted mass", () => {
+  const sim = initialiseSimulation(smallRoad(5), 2);
+  for (let i = 0; i < 50; i++) {
+    stepSimulation(sim);
+    const total = Array.from(sim.mass).reduce((acc, mass) => acc + mass, 0);
+    assert.ok(Math.abs(total - sim.injectedMass) < 1e-8);
+    assert.ok(Array.from(sim.concentration).every(c => Number.isFinite(c) && c >= 0));
+  }
+});
+test("reconstructed predecessor trace connects A to B", () => {
+  const sim = runToContact(smallRoad(0));
+  assert.deepEqual(sim.path, [0, 1, 2]);
+  assert.equal(sim.predecessor[2], 1);
+});
+test("front cannot pass an edge that forbids its direction", () => {
+  const sim = runToContact(smallRoad(0, false, true), 0, 2000);
+  assert.equal(sim.arrived, false);
+  assert.equal(sim.concentration[2], 0);
+});
+test("disabled elevation effect behaves equally on two grades", () => {
+  const down = runToContact(smallRoad(-5), 0);
+  const up = runToContact(smallRoad(5), 0);
+  assert.ok(Math.abs(down.time - up.time) < 1e-12);
+});
+test("simulation stops once B reaches the operational concentration threshold", () => {
+  const sim = runToContact(smallRoad(0));
+  const previousSteps = sim.steps;
+  stepSimulation(sim);
+  assert.equal(sim.steps, previousSteps);
+});
