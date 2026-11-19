@@ -1,13 +1,81 @@
 import { loadNetwork, distanceMetres } from "./network.mjs";
 import { initialiseSimulation, stepSimulation, SOURCE_CONCENTRATION } from "./physics.mjs";
+import { BASEMAP_STYLES, normaliseMapStyle, fluidLineStyle } from "./map-style.mjs";
 
 const $ = (id) => document.getElementById(id);
 const map = L.map("map", { zoomControl: false, preferCanvas: true }).setView([37.9802, 23.7395], 14);
 L.control.zoom({ position: "topright" }).addTo(map);
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+const fallbackRaster = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 }).addTo(map);
+
+// Keep the existing Leaflet raster map usable if the vector tiles/CDN fail.
+// Switching the basemap must not change A/B or the PDE solver's state.
+let basemap = null;
+let selectedMapStyle = "dark";
+try {
+  selectedMapStyle = normaliseMapStyle(localStorage.getItem("map-bike-style"));
+} catch {}
+
+function ensureFallbackRaster() {
+  if (!map.hasLayer(fallbackRaster)) fallbackRaster.addTo(map);
+  fallbackRaster.bringToBack();
+}
+
+function updateMapButtons() {
+  for (const name of ["positron", "dark"]) {
+    const button = document.getElementById(`style-${name}`);
+    button?.setAttribute("aria-pressed", String(selectedMapStyle === name));
+  }
+  const mapWrap = document.querySelector(".map-wrap");
+  if (mapWrap) mapWrap.dataset.basemap = selectedMapStyle;
+}
+
+function setMapStyle(nextStyle) {
+  selectedMapStyle = normaliseMapStyle(nextStyle);
+  updateMapButtons();
+  try { localStorage.setItem("map-bike-style", selectedMapStyle); } catch {}
+
+  if (typeof L.maplibreGL === "function" &&
+      typeof window.maplibregl?.supported === "function" &&
+      window.maplibregl.supported()) {
+    try {
+      ensureFallbackRaster();
+      if (!basemap) {
+        basemap = L.maplibreGL({
+          style: BASEMAP_STYLES[selectedMapStyle],
+          attribution: '&copy; <a href="https://openfreemap.org/">OpenFreeMap</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+        const gl = basemap.getMaplibreMap();
+        gl.on("idle", () => {
+          if (gl.areTilesLoaded() && map.hasLayer(fallbackRaster)) map.removeLayer(fallbackRaster);
+        });
+        gl.on("error", (event) => {
+          if (!gl.isStyleLoaded()) {
+            ensureFallbackRaster();
+            console.warn("Vector basemap unavailable; using raster fallback", event.error);
+          }
+        });
+      } else {
+        basemap.getMaplibreMap().setStyle(BASEMAP_STYLES[selectedMapStyle]);
+      }
+    } catch (error) {
+      console.warn("MapLibre basemap could not load; using raster fallback", error);
+      if (basemap && map.hasLayer(basemap)) map.removeLayer(basemap);
+      basemap = null;
+      ensureFallbackRaster();
+    }
+  } else {
+    ensureFallbackRaster();
+  }
+  // Keep the simulation and its data; repaint just the presentation.
+  if (typeof lines !== "undefined" && lines.length) {
+    for (const line of lines) { line.ca = -1; line.cb = -1; }
+    paint();
+  }
+}
+
 
 const roadLayer = L.layerGroup().addTo(map);
 const routeLayer = L.layerGroup().addTo(map);
@@ -150,7 +218,7 @@ function addRoads() {
   routeLayer.clearLayers();
   lines = graph.edges.map((edge) => {
     const [left, right] = splitAtMidpoint(edge.shape);
-    const style = { color: "#81969d", weight: 3, opacity: 0.38, interactive: false };
+    const style = { ...fluidLineStyle(0, selectedMapStyle), interactive: false };
     const leftLine = L.polyline(left, style).addTo(roadLayer);
     const rightLine = L.polyline(right, style).addTo(roadLayer);
     return { leftLine, rightLine, ca: -1, cb: -1 };
@@ -161,10 +229,9 @@ function concentrationLevel(c) {
   return Math.min(12, Math.max(1, Math.ceil(12 * Math.sqrt(c / SOURCE_CONCENTRATION))));
 }
 function styleFor(level) {
-  if (level === 0) return { color: "#889da5", weight: 3, opacity: 0.33 };
-  const alpha = 0.44 + 0.56 * (level / 12);
-  return { color: `hsl(${195 - 34 * level / 12}, 65%, ${41 - 7 * level / 12}%)`, weight: 3 + 4 * level / 12, opacity: alpha };
+  return fluidLineStyle(level, selectedMapStyle);
 }
+
 function paint() {
   if (!graph || !sim) return;
   for (let i = 0; i < graph.edges.length; i++) {
@@ -311,5 +378,9 @@ $("load").addEventListener("click", async () => {
   }
 });
 
+for (const name of ["positron", "dark"]) {
+  document.getElementById(`style-${name}`)?.addEventListener("click", () => setMapStyle(name));
+}
+setMapStyle(selectedMapStyle);
 updateControls();
 modelState("SELECT POINT A");
