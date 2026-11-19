@@ -321,6 +321,7 @@ export async function loadNetwork(a, b, notify = () => {}, signal, onRoadsReady 
       const candidate = fromOverpass(data, corridor);
       chooseEndpoints(candidate, a, b);
       graph = densifyRoadGraph(pruneUnreachable(candidate));
+      graph.roadSource = data.source || "OpenStreetMap";
       break;
     } catch (error) {
       if (!/No bicycle-accessible roads|Could not connect A and B|too far from a bicycle-accessible road|A and B are not connected/i.test(error.message)) {
