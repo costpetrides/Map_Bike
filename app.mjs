@@ -35,10 +35,13 @@ function updateControls() {
   $("set-b").classList.toggle("selected", choosing === "b");
   $("a-state").textContent = formatPoint(a);
   $("b-state").textContent = formatPoint(b);
-  $("load").disabled = !a || !b || loading;
-  $("load").textContent = loading ? "Loading road data…" : "Load road network ↗";
+  $("load").disabled = !loading && (!a || !b);
+  $("load").textContent = loading ? "Cancel loading ✕" : "Load road network ↗";
+  $("set-a").disabled = loading;
+  $("set-b").disabled = loading;
+  $("example").disabled = loading;
   $("simulate").disabled = !sim || loading || sim.arrived;
-  $("restart").disabled = !graph || loading;
+  $("restart").disabled = !sim || loading;
   $("simulate").textContent = sim?.arrived ? "Front reached B ✓" : running ? "Pause simulation ⏸" : "Start diffusion ▶";
 }
 function pointIcon(letter) {
@@ -95,7 +98,7 @@ function placePoint(which, latlng, invalidate = true) {
     status(`Set point ${which === "a" ? "B" : "A"} on the map.`);
   }
 }
-map.on("click", (e) => placePoint(choosing, e.latlng));
+map.on("click", (e) => { if (!loading) placePoint(choosing, e.latlng); });
 $("set-a").addEventListener("click", () => { choosing = "a"; updateControls(); modelState("SELECT POINT A"); status("Click the map to select A."); });
 $("set-b").addEventListener("click", () => { choosing = "b"; updateControls(); modelState("SELECT POINT B"); status("Click the map to select B."); });
 $("example").addEventListener("click", () => {
@@ -256,22 +259,38 @@ $("simulate").addEventListener("click", () => {
 });
 $("restart").addEventListener("click", resetSimulation);
 $("load").addEventListener("click", async () => {
-  if (!a || !b || loading) return;
+  if (loading) {
+    invalidateGraph();
+    updateControls();
+    modelState("LOADING CANCELLED");
+    status("Loading cancelled. Choose points and try again.");
+    return;
+  }
+  if (!a || !b) return;
   invalidateGraph();
   loading = true;
   controller = new AbortController();
+  const activeController = controller;
+  const loadingSignal = activeController.signal;
   updateControls();
   modelState("LOADING ROAD NETWORK");
-  const loadingSignal = controller.signal;
+  status("Connecting to the OpenStreetMap road service…");
   try {
-    graph = await loadNetwork(a, b, (message) => status(message), loadingSignal);
+    graph = await loadNetwork(a, b, (message) => {
+      if (!loadingSignal.aborted) status(message);
+    }, loadingSignal, (loadedRoads) => {
+      if (loadingSignal.aborted) return;
+      graph = loadedRoads;
+      addRoads();
+      $("road-count").textContent = graph.edges.length.toLocaleString();
+      modelState("ROADS LOADED · SAMPLING ELEVATION");
+      status(`Roads loaded (${graph.edges.length.toLocaleString()} segments). Loading heights…`);
+    });
     if (loadingSignal.aborted) return;
-    addRoads();
-    $("road-count").textContent = graph.edges.length.toLocaleString();
     $("elev-a").textContent = `${graph.nodes[graph.start].elevation.toFixed(0)} m`;
     $("elev-b").textContent = `${graph.nodes[graph.end].elevation.toFixed(0)} m`;
     resetSimulation();
-    status(`Loaded ${graph.nodes.length.toLocaleString()} nodes and ${graph.edges.length.toLocaleString()} road segments. Start the simulation.`);
+    status(`Ready: ${graph.nodes.length.toLocaleString()} nodes, ${graph.edges.length.toLocaleString()} road segments. Press Start diffusion.`);
     map.fitBounds([a, b], { padding: [80, 80], maxZoom: 16 });
   } catch (error) {
     if (!loadingSignal.aborted) {
@@ -280,7 +299,7 @@ $("load").addEventListener("click", async () => {
       console.error("Map_Bike loading failed:", error);
     }
   } finally {
-    if (!loadingSignal.aborted) {
+    if (controller === activeController) {
       loading = false;
       controller = null;
       updateControls();
