@@ -1,9 +1,9 @@
 
 const OVERPASS = [
   "https://overpass.private.coffee/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
   "https://overpass-api.de/api/interpreter"
 ];
+const elevationCache = new Map();
 const HIGHWAYS = /^(residential|living_street|tertiary|secondary|primary|unclassified|service|cycleway|path|footway|pedestrian|track|road)$/;
 const DEG = Math.PI / 180;
 
@@ -34,29 +34,45 @@ function directions(tags) {
   return { forward, backward };
 }
 
-async function requestRoads(bounds, signal) {
+async function requestRoads(bounds, signal, notify = () => {}) {
   const box = `${bounds.s.toFixed(6)},${bounds.w.toFixed(6)},${bounds.n.toFixed(6)},${bounds.e.toFixed(6)}`;
-  const query = `[out:json][timeout:50];way["highway"~"^(residential|living_street|tertiary|secondary|primary|unclassified|service|cycleway|path|footway|pedestrian|track|road)$"](${box});(._;>;);out body qt;`;
-  const errors = [];
-  for (const url of OVERPASS) {
+  const query = `[out:json][timeout:25];way["highway"~"^(residential|living_street|tertiary|secondary|primary|unclassified|service|cycleway|path|footway|pedestrian|track|road)$"](${box});(._;>;);out body qt;`;
+  // A second independent service is tried after 4 seconds, not 60 seconds
+  // later. Abort the losing request once valid data is received.
+  const winnerAbort = new AbortController();
+  const attempts = OVERPASS.map(async (url, index) => {
+    if (index > 0) {
+      await new Promise(resolve => setTimeout(resolve, 4000 * index));
+      if (signal?.aborted || winnerAbort.signal.aborted) throw Error("Request cancelled");
+    }
+    notify(index ? "Road server slow — trying alternate server…" : "Downloading roads from OpenStreetMap…");
+    const signals = [winnerAbort.signal, AbortSignal.timeout(16000)];
+    if (signal) signals.push(signal);
     try {
-      const timeout = AbortSignal.timeout(60000);
-      const composite = signal ? AbortSignal.any([signal, timeout]) : timeout;
       const response = await fetch(url, {
         method: "POST",
         body: new URLSearchParams({ data: query }),
-        signal: composite
+        signal: AbortSignal.any(signals)
       });
       if (!response.ok) throw Error(`HTTP ${response.status}`);
       const data = await response.json();
-      if (!Array.isArray(data.elements)) throw Error("Invalid map response");
+      if (!Array.isArray(data.elements) || !data.elements.length) {
+        throw Error("No road data returned");
+      }
       return data;
     } catch (error) {
-      if (signal?.aborted) throw error;
-      errors.push(`${url}: ${error.message}`);
+      throw Error(`${new URL(url).host}: ${error.message}`);
     }
+  });
+  try {
+    const data = await Promise.any(attempts);
+    winnerAbort.abort();
+    return data;
+  } catch (error) {
+    const detail = error.errors?.map(e => e.message).join(" / ") || error.message;
+    if (signal?.aborted) throw Error("Road loading cancelled");
+    throw Error(`Road service unavailable or too slow. ${detail}. Please retry.`);
   }
-  throw Error(`OpenStreetMap road service unavailable. ${errors.join(" / ")}`);
 }
 
 function fromOverpass(data) {
@@ -155,40 +171,66 @@ function chooseEndpoints(net, a, b) {
 }
 
 async function attachElevations(net, notify, signal) {
-  // Open-Meteo DEM has ~90 m resolution; quantise around 100 m to reduce API calls.
+  // ~130m sampling limits redundant DEM requests and makes small areas fast.
+  // Copernicus DEM data source is approximately 90m, so this is a
+  // deliberately coarse first-version approximation (not survey-grade).
   const grouped = new Map();
   for (let i = 0; i < net.nodes.length; i++) {
     const node = net.nodes[i];
-    const qLat = Math.round(node.lat / 0.0009) * 0.0009;
-    const lonStep = 0.0009 / Math.cos(node.lat * DEG);
+    const qLat = Math.round(node.lat / 0.0012) * 0.0012;
+    const lonStep = 0.0012 / Math.max(0.2, Math.cos(node.lat * DEG));
     const qLon = Math.round(node.lng / lonStep) * lonStep;
     const key = `${qLat.toFixed(5)},${qLon.toFixed(5)}`;
-    if (!grouped.has(key)) grouped.set(key, { lat: qLat, lng: qLon, indices: [] });
+    if (!grouped.has(key)) grouped.set(key, { key, lat: qLat, lng: qLon, indices: [] });
     grouped.get(key).indices.push(i);
   }
   const cells = [...grouped.values()];
-  if (cells.length > 1600) throw Error("Too many elevation samples; choose a smaller area.");
-  for (let offset = 0; offset < cells.length; offset += 100) {
-    if (signal?.aborted) throw Error("Request cancelled");
-    const batch = cells.slice(offset, offset + 100);
-    notify(`Loading elevation · ${Math.min(offset + 100, cells.length)} / ${cells.length}`);
-    const url = new URL("https://api.open-meteo.com/v1/elevation");
-    url.searchParams.set("latitude", batch.map(p => p.lat.toFixed(5)).join(","));
-    url.searchParams.set("longitude", batch.map(p => p.lng.toFixed(5)).join(","));
-    const response = await fetch(url, { signal });
-    if (!response.ok) throw Error(`Elevation service HTTP ${response.status}. Retry after a moment.`);
-    const result = await response.json();
-    if (!Array.isArray(result.elevation) || result.elevation.length !== batch.length) {
-      throw Error("Elevation service returned incomplete data.");
-    }
-    for (let j = 0; j < batch.length; j++) {
-      if (!Number.isFinite(result.elevation[j])) throw Error("Invalid elevation sample.");
-      for (const index of batch[j].indices) net.nodes[index].elevation = result.elevation[j];
+  if (cells.length > 900) throw Error("Too many elevation samples. Choose two closer points.");
+  const outstanding = [];
+  for (const cell of cells) {
+    if (elevationCache.has(cell.key)) {
+      for (const i of cell.indices) net.nodes[i].elevation = elevationCache.get(cell.key);
+    } else {
+      outstanding.push(cell);
     }
   }
+  if (!outstanding.length) {
+    notify(`Elevations loaded from cache · ${cells.length} samples`);
+    return;
+  }
+  notify(`Loading terrain elevations · 0 / ${outstanding.length} samples`);
+  const batches = [];
+  for (let i = 0; i < outstanding.length; i += 100) batches.push(outstanding.slice(i, i + 100));
+  let cursor = 0, complete = 0;
+  async function worker() {
+    while (cursor < batches.length) {
+      if (signal?.aborted) throw Error("Loading cancelled");
+      const batch = batches[cursor++];
+      const url = new URL("https://api.open-meteo.com/v1/elevation");
+      url.searchParams.set("latitude", batch.map(p => p.lat.toFixed(5)).join(","));
+      url.searchParams.set("longitude", batch.map(p => p.lng.toFixed(5)).join(","));
+      const signals = [AbortSignal.timeout(15000)];
+      if (signal) signals.push(signal);
+      const response = await fetch(url, { signal: AbortSignal.any(signals) });
+      if (!response.ok) throw Error(`Elevation service HTTP ${response.status}. Try again.`);
+      const result = await response.json();
+      if (!Array.isArray(result.elevation) || result.elevation.length !== batch.length) {
+        throw Error("Elevation data was incomplete.");
+      }
+      for (let j = 0; j < batch.length; j++) {
+        const elevation = result.elevation[j];
+        if (!Number.isFinite(elevation)) throw Error("Elevation data contains invalid values.");
+        elevationCache.set(batch[j].key, elevation);
+        for (const i of batch[j].indices) net.nodes[i].elevation = elevation;
+      }
+      complete += batch.length;
+      notify(`Loading terrain elevations · ${complete} / ${outstanding.length} samples`);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(3, batches.length) }, () => worker()));
 }
 
-export async function loadNetwork(a, b, notify = () => {}, signal) {
+export async function loadNetwork(a, b, notify = () => {}, signal, onRoadsReady = () => {}) {
   const direct = distanceMetres(a, b);
   if (direct < 80) throw Error("Choose A and B at least 80 metres apart.");
   if (direct > 2200) throw Error("For this first prototype choose points at most 2.2 km apart.");
@@ -199,9 +241,10 @@ export async function loadNetwork(a, b, notify = () => {}, signal) {
     w: Math.min(a.lng, b.lng) - lngPad, e: Math.max(a.lng, b.lng) + lngPad
   };
   notify("Loading permitted roads from OpenStreetMap…");
-  const graph = fromOverpass(await requestRoads(bounds, signal));
+  const graph = fromOverpass(await requestRoads(bounds, signal, notify));
   notify(`Roads loaded · ${graph.edges.length} segments. Connecting A to B…`);
   chooseEndpoints(graph, a, b);
+  onRoadsReady(graph);
   await attachElevations(graph, notify, signal);
   return graph;
 }
