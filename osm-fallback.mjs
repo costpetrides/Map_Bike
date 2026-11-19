@@ -24,6 +24,10 @@ export function parseOsmXml(xmlText) {
   if (typeof DOMParser === "undefined") throw Error("Browser XML parser unavailable");
   const xml = new DOMParser().parseFromString(xmlText,"application/xml");
   if (xml.querySelector("parsererror")) throw Error("Invalid XML from OSM data service");
+  return parseOsmDocument(xml);
+}
+
+export function parseOsmDocument(xml) {
   const wayElements = Array.from(xml.getElementsByTagName("way"));
   const ways = [], needed = new Set();
   for (const el of wayElements) {
