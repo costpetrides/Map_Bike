@@ -37,7 +37,7 @@ The previous loader failed after 16 s on each public Overpass endpoint; its `ove
 The current version:
 
 - Uses independent providers at `overpass.private.coffee` and `overpass.openstreetmap.fr`, started at different times to avoid a simultaneous surge.
-- Allows up to 34 s per request and explains whether a provider timed out, returned an HTTP error or failed at the network/CORS layer.
+- Allows up to 45 s per request (with a 35 s Overpass server-side limit) and explains whether a provider timed out, returned an HTTP error or failed at the network/CORS layer.
 - If the search is confined to a **very small** geographical region, attempts the independent OpenStreetMap API map endpoint as a last-resort fallback. Only roads and their referenced nodes are extracted from the XML, not buildings.
 - Cancels other pending requests when a valid response is obtained and reports which provider succeeded in the status panel.
 - Keeps the original narrow A–B corridor search, graph connectivity checks, road/elevation caching, and DEM sampling.
