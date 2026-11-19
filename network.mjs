@@ -4,6 +4,9 @@ const OVERPASS = [
   "https://overpass-api.de/api/interpreter"
 ];
 const elevationCache = new Map();
+const roadCache = new Map();
+const MAX_ROAD_CACHE = 4;
+const ROAD_PATTERN = "^(residential|living_street|tertiary|secondary|primary|unclassified|service|cycleway|path|footway|pedestrian|track|road)$";
 const HIGHWAYS = /^(residential|living_street|tertiary|secondary|primary|unclassified|service|cycleway|path|footway|pedestrian|track|road)$/;
 const DEG = Math.PI / 180;
 
@@ -34,29 +37,60 @@ function directions(tags) {
   return { forward, backward };
 }
 
-async function requestRoads(bounds, signal, notify = () => {}) {
-  const box = `${bounds.s.toFixed(6)},${bounds.w.toFixed(6)},${bounds.n.toFixed(6)},${bounds.e.toFixed(6)}`;
-  const query = `[out:json][timeout:25];way["highway"~"^(residential|living_street|tertiary|secondary|primary|unclassified|service|cycleway|path|footway|pedestrian|track|road)$"](${box});(._;>;);out body qt;`;
-  // A second independent service is tried after 4 seconds, not 60 seconds
-  // later. Abort the losing request once valid data is received.
+// A thin 4-vertex polygon centred on the line A-B. The margin is in metres,
+// independent of the map's current zoom or the orientation of the route.
+export function corridorSpec(a, b, marginMetres) {
+  const meanLat = (a.lat + b.lat) / 2;
+  const metresLat = 111195;
+  const metresLon = 111195 * Math.max(0.2, Math.cos(meanLat * DEG));
+  const ax = a.lng * metresLon, ay = a.lat * metresLat;
+  const bx = b.lng * metresLon, by = b.lat * metresLat;
+  const distance = Math.hypot(bx - ax, by - ay);
+  const ux = (bx - ax) / distance, uy = (by - ay) / distance;
+  const nx = -uy, ny = ux;
+  const points = [
+    [ax - ux * marginMetres + nx * marginMetres, ay - uy * marginMetres + ny * marginMetres],
+    [bx + ux * marginMetres + nx * marginMetres, by + uy * marginMetres + ny * marginMetres],
+    [bx + ux * marginMetres - nx * marginMetres, by + uy * marginMetres - ny * marginMetres],
+    [ax - ux * marginMetres - nx * marginMetres, ay - uy * marginMetres - ny * marginMetres]
+  ].map(([x, y]) => ({ lat: y / metresLat, lng: x / metresLon }));
+  const poly = points.map(p => `${p.lat.toFixed(6)} ${p.lng.toFixed(6)}`).join(" ");
+  // Local clipping uses a capsule: this is slightly tighter than the
+  // Overpass rectangle but contains every A-B-aligned route segment.
+  function contains(p) {
+    const px = p.lng * metresLon - ax, py = p.lat * metresLat - ay;
+    const along = Math.max(0, Math.min(distance, px * ux + py * uy));
+    return Math.hypot(px - along * ux, py - along * uy) <= marginMetres + 20;
+  }
+  return { poly, contains, marginMetres };
+}
+
+async function requestRoads(corridor, signal, notify = () => {}) {
+  // Return only necessary tags on ways; node coordinates without node tags.
+  // Overpass poly avoids downloading unrelated streets in the box corners.
+  const query = `[out:json][timeout:25];way["highway"~"${ROAD_PATTERN}"](poly:"${corridor.poly}");out body qt;>;out skel qt;`;
+  const key = corridor.poly;
+  if (roadCache.has(key)) {
+    notify("Reusing previously downloaded roads…");
+    return roadCache.get(key);
+  }
   const winnerAbort = new AbortController();
   const attempts = OVERPASS.map(async (url, index) => {
     if (index > 0) {
       await new Promise(resolve => setTimeout(resolve, 4000 * index));
       if (signal?.aborted || winnerAbort.signal.aborted) throw Error("Request cancelled");
     }
-    notify(index ? "Road server slow — trying alternate server…" : "Downloading roads from OpenStreetMap…");
+    notify(index ? "Road server slow — trying alternate server…" : "Downloading local road corridor…");
     const signals = [winnerAbort.signal, AbortSignal.timeout(16000)];
     if (signal) signals.push(signal);
     try {
       const response = await fetch(url, {
-        method: "POST",
-        body: new URLSearchParams({ data: query }),
+        method: "POST", body: new URLSearchParams({ data: query }),
         signal: AbortSignal.any(signals)
       });
       if (!response.ok) throw Error(`HTTP ${response.status}`);
       const data = await response.json();
-      if (!Array.isArray(data.elements) || !data.elements.length) {
+      if (!Array.isArray(data.elements) || data.elements.length === 0) {
         throw Error("No road data returned");
       }
       return data;
@@ -67,6 +101,10 @@ async function requestRoads(bounds, signal, notify = () => {}) {
   try {
     const data = await Promise.any(attempts);
     winnerAbort.abort();
+    if (!signal?.aborted) {
+      roadCache.set(key, data);
+      if (roadCache.size > MAX_ROAD_CACHE) roadCache.delete(roadCache.keys().next().value);
+    }
     return data;
   } catch (error) {
     const detail = error.errors?.map(e => e.message).join(" / ") || error.message;
@@ -75,7 +113,7 @@ async function requestRoads(bounds, signal, notify = () => {}) {
   }
 }
 
-function fromOverpass(data) {
+function fromOverpass(data, corridor) {
   const original = new Map();
   const allWays = [];
   for (const el of data.elements) {
@@ -112,7 +150,9 @@ function fromOverpass(data) {
       const isJunction = (count.get(next) || 0) > 1;
       const isEnd = i === way.nodes.length - 1;
       if (!isJunction && !isEnd && length < 60) continue;
-      if (length > 0.5 && next !== anchor) {
+      if (length > 0.5 && next !== anchor &&
+          (corridor.contains(original.get(anchor)) || corridor.contains(original.get(next))
+           || corridor.contains(shape[Math.floor(shape.length / 2)]))) {
         const a = getIndex(anchor), b = getIndex(next);
         if (a !== b) {
           const key = `${way.osmWayId}:${Math.min(a, b)}:${Math.max(a, b)}`;
@@ -168,6 +208,22 @@ function chooseEndpoints(net, a, b) {
   }
   if (!choice) throw Error("Could not connect A and B on the downloaded, permitted road network. Try closer or different points.");
   net.start = choice.start; net.end = choice.end;
+}
+
+// Unreachable components can never receive fluid from A. Remove them before
+// requesting DEM heights or allocating the numerical solver.
+export function pruneUnreachable(net) {
+  const keep = reachableFrom(net, net.start);
+  if (!keep[net.end]) throw Error("A and B are not connected");
+  const indices = new Int32Array(net.nodes.length).fill(-1);
+  const nodes = [];
+  for (let i = 0; i < keep.length; i++) {
+    if (keep[i]) { indices[i] = nodes.length; nodes.push(net.nodes[i]); }
+  }
+  const edges = net.edges.filter(e => keep[e.a] && keep[e.b]).map(e => ({
+    ...e, a: indices[e.a], b: indices[e.b]
+  }));
+  return { nodes, edges, start: indices[net.start], end: indices[net.end] };
 }
 
 async function attachElevations(net, notify, signal) {
@@ -234,16 +290,33 @@ export async function loadNetwork(a, b, notify = () => {}, signal, onRoadsReady 
   const direct = distanceMetres(a, b);
   if (direct < 80) throw Error("Choose A and B at least 80 metres apart.");
   if (direct > 2200) throw Error("For this first prototype choose points at most 2.2 km apart.");
-  const latPad = 0.0026 + Math.abs(a.lat - b.lat) * 0.10;
-  const lngPad = 0.0026 / Math.cos(a.lat * DEG) + Math.abs(a.lng - b.lng) * 0.10;
-  const bounds = {
-    s: Math.min(a.lat, b.lat) - latPad, n: Math.max(a.lat, b.lat) + latPad,
-    w: Math.min(a.lng, b.lng) - lngPad, e: Math.max(a.lng, b.lng) + lngPad
-  };
-  notify("Loading permitted roads from OpenStreetMap…");
-  const graph = fromOverpass(await requestRoads(bounds, signal, notify));
-  notify(`Roads loaded · ${graph.edges.length} segments. Connecting A to B…`);
-  chooseEndpoints(graph, a, b);
+  // Adaptive search, with conservative fallback for detours.
+  // The initial corridor is much smaller than a city-centred rectangular box.
+  const baseMargin = Math.max(125, Math.min(320, 95 + direct * 0.11));
+  const multipliers = [1, 2, 3.5];
+  let graph = null;
+  for (let attempt = 0; attempt < multipliers.length; attempt++) {
+    if (signal?.aborted) throw Error("Road loading cancelled");
+    const corridor = corridorSpec(a, b, baseMargin * multipliers[attempt]);
+    notify(`Searching roads near A–B · corridor ${Math.round(corridor.marginMetres)} m (${attempt + 1}/${multipliers.length})…`);
+    const data = await requestRoads(corridor, signal, notify);
+    try {
+      const candidate = fromOverpass(data, corridor);
+      chooseEndpoints(candidate, a, b);
+      graph = pruneUnreachable(candidate);
+      break;
+    } catch (error) {
+      if (!/No bicycle-accessible roads|Could not connect A and B|too far from a bicycle-accessible road|A and B are not connected/i.test(error.message)) {
+        throw error;
+      }
+      if (attempt === multipliers.length - 1) {
+        throw Error("No connected A–B road network found after expanding the search. Try different points.");
+      }
+      notify("No connection in this corridor — expanding the road search…");
+    }
+  }
+  if (signal?.aborted) throw Error("Road loading cancelled");
+  notify(`Relevant connected roads · ${graph.edges.length} segments / ${graph.nodes.length} nodes`);
   onRoadsReady(graph);
   await attachElevations(graph, notify, signal);
   return graph;
