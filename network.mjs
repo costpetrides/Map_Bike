@@ -2,7 +2,8 @@ import { assignNodeElevations } from "./elevation.mjs";
 
 const OVERPASS = [
   "https://overpass.private.coffee/api/interpreter",
-  "https://overpass-api.de/api/interpreter"
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://lz4.overpass-api.de/api/interpreter"
 ];
 const elevationCache = new Map();
 const roadCache = new Map();
@@ -85,8 +86,11 @@ async function requestRoads(corridor, signal, notify = () => {}) {
     const signals = [winnerAbort.signal, AbortSignal.timeout(16000)];
     if (signal) signals.push(signal);
     try {
-      const response = await fetch(url, {
-        method: "POST", body: new URLSearchParams({ data: query }),
+      // GET with encoded Overpass QL avoids some cross-origin POST failures
+      // in mobile browsers and is supported by the Overpass interpreter.
+      const requestUrl = `${url}?data=${encodeURIComponent(query)}`;
+      const response = await fetch(requestUrl, {
+        method: "GET",
         signal: AbortSignal.any(signals)
       });
       if (!response.ok) throw Error(`HTTP ${response.status}`);
