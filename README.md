@@ -39,7 +39,7 @@ MapLibre and its Leaflet adapter are loaded from a version-pinned CDN; these are
 4. Press **Start diffusion**. The line colours update as the concentration spreads. Pause and resume, adjust animation speed, or reset.
 5. When the numerical concentration threshold at B is reached, the simulation pauses and highlights a heuristic predecessor trace (when one can be reconstructed).
 
-Select A or B again to change points. For this proof of concept they must be **80 metres to 2.2 km apart**. Large networks and public service outages may cause an explicit loading error.
+Select A or B again to change points. For this proof of concept they must be **80 metres to 25 km apart (straight-line distance)**. Large networks and public service outages may cause an explicit loading error.
 
 ### Road API recovery (19 November 2026)
 
@@ -54,6 +54,14 @@ The current version:
 - Keeps the original narrow A–B corridor search, graph connectivity checks, road/elevation caching, and DEM sampling.
 
 **Important:** the public OpenStreetMap core API is primarily intended for map editing rather than repeated read-only extraction. This very small-area fallback is experimental and not a solution for high traffic, large distances or production deployment. A self-hosted extract service or hosted Overpass instance is required for robust long-term use. Public services may still fail or block cross-origin requests. No successful end-to-end Safari/online-API test has been confirmed.
+
+### Longer point-to-point distances (November 2026)
+
+- The former 2.2 km hard stop is replaced by a **25 km straight-line browser budget**. Routes above 2.2 km use multiple Overpass road-search corridors of about 1.8 km each, with overlapping endpoints so road junctions stay connected.
+- At most **two corridor requests** run concurrently. Their OSM nodes and ways are deduplicated by ID before the usual directed, bicycle-accessible road graph is constructed; one-way rules remain in force.
+- The existing side-margin expansion runs only when A and B cannot be connected. The maximum raw/densified graph budgets are larger, with a gradual increase in DEM sampling spacing for very dense networks to control browser memory.
+- Progress reports show completed road sections. Large or highly connected areas may still exceed the browser's graph/DEM budget, and public Overpass or terrain services can fail or rate-limit requests.
+- These changes enable loading larger A–B selections; **they do not validate fast numerical arrival or optimal routing over long distances**. The diffusion solver still has finite simulation limits.
 
 ### Faster road-data loading (November 2026)
 
