@@ -9,6 +9,14 @@ const OVERPASS = [
 const elevationCache = new Map();
 const roadCache = new Map();
 const MAX_ROAD_CACHE = 4;
+// Longer journeys use bounded, overlapping Overpass polygons instead of
+// requesting a single large city-scale extract.
+const ROAD_CHUNK_METRES = 1800;
+const MAX_DIRECT_METRES = 25000;
+const MAX_GRAPH_NODES = 20000;
+const MAX_GRAPH_EDGES = 28000;
+const MAX_DENSE_NODES = 40000;
+const MAX_DENSE_EDGES = 52000;
 const ROAD_PATTERN = "^(residential|living_street|tertiary|secondary|primary|unclassified|service|cycleway|path|footway|pedestrian|track|road)$";
 const HIGHWAYS = /^(residential|living_street|tertiary|secondary|primary|unclassified|service|cycleway|path|footway|pedestrian|track|road)$/;
 const DEG = Math.PI / 180;
@@ -78,7 +86,17 @@ async function requestRoads(corridor, signal, notify = () => {}) {
   const localAbort = new AbortController();
   const attempts = [];
 
-  const pause = ms => new Promise(resolve => setTimeout(resolve,ms));
+  // Cancel delayed backup requests as soon as another provider succeeds.
+  const waitSignal = signal ? AbortSignal.any([localAbort.signal, signal]) : localAbort.signal;
+  const pause = ms => new Promise((resolve, reject) => {
+    if (waitSignal.aborted) { reject(Error("Request cancelled")); return; }
+    const onAbort = () => { clearTimeout(timer); reject(Error("Request cancelled")); };
+    const timer = setTimeout(() => {
+      waitSignal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    waitSignal.addEventListener("abort", onAbort, { once: true });
+  });
 
   // Delayed independent providers avoid a sudden burst of identical requests.
   for (const [index, url] of OVERPASS.entries()) {
@@ -137,6 +155,61 @@ async function requestRoads(corridor, signal, notify = () => {}) {
   }
 }
 
+// Cover long A–B selections with small overlapping requests. The end caps
+// overlap adjacent corridors, so shared OSM way/node IDs retain connectivity.
+export function roadSearchCorridors(a, b, marginMetres, chunkMetres = ROAD_CHUNK_METRES) {
+  const count = Math.max(1, Math.ceil(distanceMetres(a, b) / chunkMetres));
+  const pointAt = fraction => ({
+    lat: a.lat + (b.lat - a.lat) * fraction,
+    lng: a.lng + (b.lng - a.lng) * fraction
+  });
+  return Array.from({ length: count }, (_, i) =>
+    corridorSpec(pointAt(i / count), pointAt((i + 1) / count), marginMetres));
+}
+
+async function requestSegmentedRoads(a, b, marginMetres, signal, notify) {
+  const corridors = roadSearchCorridors(a, b, marginMetres);
+  if (corridors.length === 1) return requestRoads(corridors[0], signal, notify);
+
+  const controller = new AbortController();
+  const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  const responses = new Array(corridors.length);
+  let next = 0, completed = 0;
+  notify(`Downloading ${corridors.length} small road sections (2 at a time)…`);
+  async function worker() {
+    while (next < corridors.length) {
+      if (combined.aborted) throw Error("Road loading cancelled");
+      const index = next++;
+      // Keep provider messages from overwriting the useful overall progress.
+      responses[index] = await requestRoads(corridors[index], combined, () => {});
+      completed++;
+      notify(`Road sections loaded · ${completed} / ${corridors.length}`);
+    }
+  }
+  try {
+    await Promise.all(Array.from({ length: Math.min(2, corridors.length) }, () => worker()));
+    if (combined.aborted) throw Error("Road loading cancelled");
+  } catch (error) {
+    controller.abort();
+    if (signal?.aborted) throw Error("Road loading cancelled");
+    throw error;
+  }
+  // Each Overpass polygon may return complete ways crossing its boundary.
+  // Deduplicate by stable OSM IDs before building a single directed graph.
+  const nodes = new Map(), ways = new Map(), sources = new Set();
+  for (const data of responses) {
+    sources.add(data.source || "OpenStreetMap");
+    for (const el of data.elements) {
+      if (el.type === "node") nodes.set(el.id, el);
+      else if (el.type === "way") ways.set(el.id, el);
+    }
+  }
+  return {
+    elements: [...nodes.values(), ...ways.values()],
+    source: [...sources].join(" + ")
+  };
+}
+
 function fromOverpass(data, corridor) {
   const original = new Map();
   const allWays = [];
@@ -190,8 +263,8 @@ function fromOverpass(data, corridor) {
     }
   }
   if (!edges.length) throw Error("No bicycle-accessible roads in the selected area.");
-  if (nodes.length > 5500 || edges.length > 7500) {
-    throw Error("Road network too large. Select two closer points (ideally less than 1 km apart).");
+  if (nodes.length > MAX_GRAPH_NODES || edges.length > MAX_GRAPH_EDGES) {
+    throw Error("The selected corridor contains too many roads for the browser. Choose a shorter distance or a less dense area.");
   }
   return { nodes, edges };
 }
@@ -297,8 +370,8 @@ export function densifyRoadGraph(graph, maxSpacingMetres = 55) {
       previousPos = position;
     }
   }
-  if (nodes.length > 12000 || edges.length > 16000)
-    throw Error("Road network is too large for the prototype. Choose closer points.");
+  if (nodes.length > MAX_DENSE_NODES || edges.length > MAX_DENSE_EDGES)
+    throw Error("The sampled road graph exceeds the browser's safety limit. Choose a shorter distance or a less dense area.");
   return {nodes, edges, start:graph.start, end:graph.end};
 }
 
@@ -306,21 +379,28 @@ export function densifyRoadGraph(graph, maxSpacingMetres = 55) {
 export async function loadNetwork(a, b, notify = () => {}, signal, onRoadsReady = () => {}) {
   const direct = distanceMetres(a, b);
   if (direct < 80) throw Error("Choose A and B at least 80 metres apart.");
-  if (direct > 2200) throw Error("For this first prototype choose points at most 2.2 km apart.");
-  // Adaptive search, with conservative fallback for detours.
-  // The initial corridor is much smaller than a city-centred rectangular box.
+  if (direct > MAX_DIRECT_METRES) throw Error("For now, choose points at most 25 km apart (straight-line distance).");
+  // Adaptive, narrow corridor around A–B. Long corridors are split into
+  // short requests; expand sideways only when the legal roads do not connect.
   const baseMargin = Math.max(125, Math.min(320, 95 + direct * 0.11));
   const multipliers = [1, 2, 3.5];
   let graph = null;
   for (let attempt = 0; attempt < multipliers.length; attempt++) {
     if (signal?.aborted) throw Error("Road loading cancelled");
-    const corridor = corridorSpec(a, b, baseMargin * multipliers[attempt]);
-    notify(`Searching roads near A–B · corridor ${Math.round(corridor.marginMetres)} m (${attempt + 1}/${multipliers.length})…`);
-    const data = await requestRoads(corridor, signal, notify);
+    const margin = baseMargin * multipliers[attempt];
+    const corridor = corridorSpec(a, b, margin);
+    notify(`Searching roads near A–B · corridor ${Math.round(margin)} m (${attempt + 1}/${multipliers.length})…`);
+    const data = await requestSegmentedRoads(a, b, margin, signal, notify);
     try {
       const candidate = fromOverpass(data, corridor);
       chooseEndpoints(candidate, a, b);
-      graph = densifyRoadGraph(pruneUnreachable(candidate));
+      const connected = pruneUnreachable(candidate);
+      // Retain 55 m road sampling whenever possible; on very large graphs
+      // gradually relax spacing rather than exhausting browser memory.
+      const remaining = Math.max(1, MAX_DENSE_NODES - connected.nodes.length);
+      const roadLength = connected.edges.reduce((sum, edge) => sum + edge.length, 0);
+      const spacing = Math.max(55, Math.ceil(roadLength / remaining));
+      graph = densifyRoadGraph(connected, spacing);
       graph.roadSource = data.source || "OpenStreetMap";
       break;
     } catch (error) {
