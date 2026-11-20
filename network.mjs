@@ -114,10 +114,12 @@ async function requestRoads(corridor, signal, notify = () => {}) {
         });
         if(!response.ok)throw Error(`HTTP ${response.status}`);
         const data=await response.json();
-        if(!Array.isArray(data.elements)||!data.elements.some(e=>e.type==="way"))
-          throw Error(data.remark || "No road ways in response");
-        if(data.remark && /runtime error|timed out|out of memory/i.test(data.remark))
+        if (!Array.isArray(data.elements))
+          throw Error(data.remark || "Invalid road data response");
+        if (data.remark && /runtime error|timed out|out of memory/i.test(data.remark))
           throw Error(data.remark);
+        // An empty section is valid: the adaptive search can widen the
+        // corridor if no connected roads are found after merging sections.
         data.source=new URL(url).host;
         return data;
       } catch(error) {
