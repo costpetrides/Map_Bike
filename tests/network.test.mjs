@@ -162,3 +162,77 @@ test("road subdivision samples interior elevations without changing connectivity
   const total=out.edges.reduce((sum,e)=>sum+e.length,0);
   assert.ok(Math.abs(total-180)<1e-9);
 });
+
+test("long-distance road requests are chunked, merged, and preserve bicycle one-ways", async (t) => {
+  const { roadSearchCorridors, distanceMetres } = await import("../network.mjs");
+  const a = { lat: 37.98, lng: 23.70 };
+  const b = { lat: 37.98, lng: 23.766 };
+  const corridors = roadSearchCorridors(a, b, 320);
+  assert.ok(distanceMetres(a, b) > 5000);
+  assert.ok(corridors.length >= 3, "Long requests must be split");
+  assert.ok(corridors.every(c => c.marginMetres === 320));
+  for (let i = 1; i < corridors.length; i++) {
+    const midpoint = {
+      lat: a.lat + (b.lat - a.lat) * i / corridors.length,
+      lng: a.lng + (b.lng - a.lng) * i / corridors.length
+    };
+    assert.ok(corridors[i - 1].contains(midpoint) && corridors[i].contains(midpoint));
+  }
+
+  const originalFetch = globalThis.fetch;
+  const nodes = Array.from({ length: 13 }, (_, i) => ({
+    type: "node", id: 1000 + i, lat: a.lat, lon: a.lng + (b.lng - a.lng) * i / 12
+  }));
+  const ways = Array.from({ length: 12 }, (_, i) => ({
+    type: "way", id: 2000 + i, nodes: [1000 + i, 1001 + i],
+    tags: { highway: "residential", oneway: "yes" }
+  }));
+  let roadRequests = 0;
+  globalThis.fetch = async (requestUrl) => {
+    const url = String(requestUrl);
+    if (url.includes("/api/interpreter")) {
+      roadRequests++;
+      const query = new URL(url).searchParams.get("data");
+      const match = query.match(/poly:"([^"]+)"/);
+      assert.ok(match, "Chunked Overpass requests must use a polygon");
+      const coords = match[1].split(/\s+/).map(Number);
+      const west = Math.min(coords[1], coords[3], coords[5], coords[7]);
+      const east = Math.max(coords[1], coords[3], coords[5], coords[7]);
+      const included = ways.filter(w => {
+        const lo = nodes[w.nodes[0] - 1000].lon;
+        const hi = nodes[w.nodes[1] - 1000].lon;
+        return lo <= east && hi >= west;
+      });
+      const needed = new Set(included.flatMap(w => w.nodes));
+      return {
+        ok: true,
+        json: async () => ({
+          elements: [...nodes.filter(n => needed.has(n.id)), ...included]
+        })
+      };
+    }
+    if (url.includes("/v1/elevation")) {
+      const count = new URL(url).searchParams.get("latitude").split(",").length;
+      return { ok: true, json: async () => ({ elevation: Array(count).fill(95) }) };
+    }
+    throw Error("DEM tile intentionally unavailable in Node test");
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const messages = [];
+  const graph = await loadNetwork(a, b, message => messages.push(message));
+  assert.ok(roadRequests >= corridors.length, "Must query multiple small sections");
+  assert.ok(messages.some(message => message.includes("sections loaded")));
+  assert.ok(graph.nodes.every(n => n.elevation === 95));
+  assert.ok(graph.edges.length > 20, "Connected graph must be densified for DEM");
+  assert.ok(graph.edges.every(e => e.forward && !e.backward));
+  assert.ok(Math.abs(graph.edges.reduce((sum, e) => sum + e.length, 0)
+    - distanceMetres(a, b)) < 50, "Overlapping OSM ways must not be duplicated");
+  assert.ok(graph.start !== graph.end);
+});
+
+test("distances beyond the browser research budget fail clearly", async () => {
+  await assert.rejects(
+    loadNetwork({ lat: 37.98, lng: 23.70 }, { lat: 38.28, lng: 23.70 }),
+    /at most 25 km/
+  );
+});
