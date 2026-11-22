@@ -1,22 +1,41 @@
-// Conservative, nonlinear diffusion–drift on a road metric graph.
-// Each edge is a finite-volume face; all distances are scaled by 50 metres.
-// Boundary at A: fixed concentration reservoir (continuous injection).
-// A threshold detects an operational arrival at B, not a mathematical first contact.
+// Conservative nonlinear diffusion–drift on a directed road graph.
+// The active frontier skips dormant edges, preserving the original finite-volume
+// flux and mass balance (zero concentration gives zero flux on dormant edges).
 export const CELL_METRES = 50;
 export const SOURCE_CONCENTRATION = 2;
 export const DETECTION_CONCENTRATION = 0.035;
 export const DIFFUSIVITY = 2.5;
 
+function exposeNode(sim, node) {
+  for (const edgeIndex of sim.adjacency[node]) {
+    if (sim.activeEdgeFlags[edgeIndex]) continue;
+    sim.activeEdgeFlags[edgeIndex] = 1;
+    sim.activeEdges.push(edgeIndex);
+    const edge = sim.edges[edgeIndex];
+    const neighbour = edge.a === node ? edge.b : edge.a;
+    if (!sim.activeNodeFlags[neighbour]) {
+      sim.activeNodeFlags[neighbour] = 1;
+      sim.activeNodes.push(neighbour);
+    }
+  }
+}
+
 export function initialiseSimulation(network, terrainStrength = 2) {
   const n = network.nodes.length;
   if (network.start === network.end) throw Error("A and B must be different road nodes.");
   const volumes = new Float64Array(n);
-  const edges = network.edges.map((e) => {
-    const h = Math.max(0.12, e.length / CELL_METRES);
-    const grade = (network.nodes[e.b].elevation - network.nodes[e.a].elevation) / Math.max(1, e.length);
-    volumes[e.a] += h / 2;
-    volumes[e.b] += h / 2;
-    return { ...e, h, grade };
+  const adjacency = Array.from({ length: n }, () => []);
+  const edges = network.edges.map((edge, index) => {
+    const h = Math.max(0.12, edge.length / CELL_METRES);
+    const grade = (network.nodes[edge.b].elevation - network.nodes[edge.a].elevation)
+      / Math.max(1, edge.length);
+    volumes[edge.a] += h / 2;
+    volumes[edge.b] += h / 2;
+    adjacency[edge.a].push(index);
+    adjacency[edge.b].push(index);
+    // The solver doesn't need coordinates, OSM IDs or polyline shapes.
+    return { a: edge.a, b: edge.b, h, grade,
+      forward: edge.forward, backward: edge.backward };
   });
   for (let i = 0; i < n; i++) volumes[i] = Math.max(0.25, volumes[i]);
   const mass = new Float64Array(n);
@@ -26,38 +45,48 @@ export function initialiseSimulation(network, terrainStrength = 2) {
   concentration[network.start] = SOURCE_CONCENTRATION;
   mass[network.start] = SOURCE_CONCENTRATION * volumes[network.start];
   arrivalTime[network.start] = 0;
-  return {
-    network, edges, volumes, mass, concentration, predecessor, arrivalTime,
+  const sim = {
+    network, edges, adjacency, volumes, mass, concentration, predecessor, arrivalTime,
     rates: new Float64Array(n), changes: new Float64Array(n),
     bestFlux: new Float64Array(n), bestFrom: new Int32Array(n),
+    activeEdges: [], activeEdgeFlags: new Uint8Array(edges.length),
+    activeNodes: [network.start], activeNodeFlags: new Uint8Array(n),
+    expandedFlags: new Uint8Array(n),
     terrainStrength, time: 0, steps: 0, injectedMass: mass[network.start],
     arrived: false, path: [], maxConcentration: SOURCE_CONCENTRATION
   };
+  sim.activeNodeFlags[network.start] = 1;
+  sim.expandedFlags[network.start] = 1;
+  exposeNode(sim, network.start);
+  return sim;
 }
 
 export function stepSimulation(sim) {
   if (sim.arrived) return;
-  const { concentration: c, edges, rates, volumes } = sim;
-  rates.fill(0);
-  // Explicit finite-volume stability bound for degenerate diffusion + upwind drift.
-  for (const e of edges) {
+  const { concentration: c, edges, rates, changes, bestFlux, bestFrom,
+    volumes, activeEdges, activeNodes } = sim;
+  // Reset and visit only the reached region and its immediate neighbours.
+  for (const i of activeNodes) {
+    rates[i] = 0;
+    changes[i] = 0;
+    bestFlux[i] = 0;
+    bestFrom[i] = -1;
+  }
+  for (const edgeIndex of activeEdges) {
+    const e = edges[edgeIndex];
     const v = -14 * sim.terrainStrength * e.grade;
     const stiffness = 2 * DIFFUSIVITY * Math.max(c[e.a], c[e.b]) / e.h + Math.abs(v);
     rates[e.a] += stiffness / volumes[e.a];
     rates[e.b] += stiffness / volumes[e.b];
   }
   let maxRate = 0;
-  for (let i = 0; i < rates.length; i++) maxRate = Math.max(maxRate, rates[i]);
+  for (const i of activeNodes) maxRate = Math.max(maxRate, rates[i]);
   const dt = Math.min(0.12, maxRate > 0 ? 0.28 / maxRate : 0.12);
-  const { changes, bestFlux, bestFrom } = sim;
-  changes.fill(0);
-  bestFlux.fill(0);
-  bestFrom.fill(-1);
-  for (const e of edges) {
-    const a = e.a, b = e.b, drift = -14 * sim.terrainStrength * e.grade;
+  for (const edgeIndex of activeEdges) {
+    const e = edges[edgeIndex], a = e.a, b = e.b;
+    const drift = -14 * sim.terrainStrength * e.grade;
     let flux = -DIFFUSIVITY * (c[b] * c[b] - c[a] * c[a]) / e.h
       + drift * (drift >= 0 ? c[a] : c[b]);
-    // One-way bicycle roads behave as one-way valves in this exploratory PDE model.
     if ((flux > 0 && !e.forward) || (flux < 0 && !e.backward)) flux = 0;
     if (flux > 0 && flux > bestFlux[b]) { bestFlux[b] = flux; bestFrom[b] = a; }
     else if (flux < 0 && -flux > bestFlux[a]) { bestFlux[a] = -flux; bestFrom[a] = b; }
@@ -65,21 +94,28 @@ export function stepSimulation(sim) {
     changes[b] += flux * dt;
   }
   const previousTime = sim.time;
-  for (let i = 0; i < c.length; i++) {
+  // Newly reached nodes become active at the next step; no dormant edges can
+  // have non-zero flux before one of their endpoints has positive concentration.
+  const currentNodeCount = activeNodes.length;
+  for (let k = 0; k < currentNodeCount; k++) {
+    const i = activeNodes[k];
     const newMass = Math.max(0, sim.mass[i] + changes[i]);
     sim.mass[i] = newMass;
     c[i] = newMass / volumes[i];
+    if (newMass > 0 && !sim.expandedFlags[i]) {
+      sim.expandedFlags[i] = 1;
+      exposeNode(sim, i);
+    }
   }
-  // Replenish A; its cumulative injection is tracked explicitly.
   const sourceMass = SOURCE_CONCENTRATION * volumes[sim.network.start];
   sim.injectedMass += sourceMass - sim.mass[sim.network.start];
   sim.mass[sim.network.start] = sourceMass;
   c[sim.network.start] = SOURCE_CONCENTRATION;
   sim.time = previousTime + dt;
   sim.steps++;
-  for (let i = 0; i < c.length; i++) {
+  for (let k = 0; k < currentNodeCount; k++) {
+    const i = activeNodes[k];
     if (sim.arrivalTime[i] !== Infinity || c[i] < DETECTION_CONCENTRATION) continue;
-    // Only accept a predecessor that was active earlier, preventing cyclic traces.
     const parent = bestFrom[i];
     if (parent >= 0 && sim.arrivalTime[parent] < sim.time) {
       sim.predecessor[i] = parent;
@@ -97,7 +133,8 @@ export function tracePath(sim) {
   const seen = new Set();
   let node = sim.network.end;
   while (node !== -1 && !seen.has(node) && p.length <= sim.network.nodes.length) {
-    seen.add(node); p.push(node);
+    seen.add(node);
+    p.push(node);
     if (node === sim.network.start) return p.reverse();
     node = sim.predecessor[node];
   }
