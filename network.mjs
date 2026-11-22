@@ -8,10 +8,12 @@ const OVERPASS = [
 ];
 const elevationCache = new Map();
 const roadCache = new Map();
-const MAX_ROAD_CACHE = 4;
+const MAX_ROAD_CACHE = 12;
 // Longer journeys use bounded, overlapping Overpass polygons instead of
 // requesting a single large city-scale extract.
-const ROAD_CHUNK_METRES = 2200;
+const ROAD_CHUNK_METRES = 1400;
+export const ROAD_GEOMETRY_SPACING_METRES = 140;
+export const ROAD_DEM_SPACING_METRES = 110;
 export const MAX_ROUTE_METRES = 10000;
 const MAX_DIRECT_METRES = MAX_ROUTE_METRES;
 const MAX_GRAPH_NODES = 20000;
@@ -250,7 +252,7 @@ function fromOverpass(data, corridor) {
       shape.push(original.get(next));
       const isJunction = (count.get(next) || 0) > 1;
       const isEnd = i === way.nodes.length - 1;
-      if (!isJunction && !isEnd && length < 60) continue;
+      if (!isJunction && !isEnd && length < ROAD_GEOMETRY_SPACING_METRES) continue;
       if (length > 0.5 && next !== anchor &&
           (corridor.contains(original.get(anchor)) || corridor.contains(original.get(next))
            || corridor.contains(shape[Math.floor(shape.length / 2)]))) {
@@ -388,7 +390,7 @@ export function pruneUnreachable(net) {
   return { nodes, edges, start: indices[net.start], end: indices[net.end] };
 }
 
-export function densifyRoadGraph(graph, maxSpacingMetres = 55) {
+export function densifyRoadGraph(graph, maxSpacingMetres = ROAD_DEM_SPACING_METRES) {
   // Sample the road geometry at regular arc-length intervals so DEM slopes
   // are not calculated only from distant junction endpoints.
   const nodes = graph.nodes.slice();
@@ -437,14 +439,19 @@ export function densifyRoadGraph(graph, maxSpacingMetres = 55) {
 }
 
 
+// Wider than the former 125–260 m default, without one oversized city query.
+export function initialRoadSearchMarginMetres(directMetres) {
+  return Math.max(250, Math.min(520, 200 + directMetres * 0.045));
+}
+
 export async function loadNetwork(a, b, notify = () => {}, signal, onRoadsReady = () => {}) {
   const direct = distanceMetres(a, b);
   if (direct < 80) throw Error("Choose A and B at least 80 metres apart.");
   if (direct > MAX_DIRECT_METRES) throw Error("B is outside the 10 km straight-line radius from A.");
-  // Adaptive, narrow corridor around A–B. Long corridors are split into
-  // short requests; expand sideways only when the legal roads do not connect.
-  const baseMargin = Math.max(125, Math.min(260, 95 + direct * 0.027));
-  const multipliers = [1, 2, 3.5];
+  // Wider default corridor captures more alternative bicycle streets. Smaller
+  // 1.4 km requests keep each public Overpass job bounded as area increases.
+  const baseMargin = initialRoadSearchMarginMetres(direct);
+  const multipliers = [1, 1.5, 2.25];
   let graph = null;
   for (let attempt = 0; attempt < multipliers.length; attempt++) {
     if (signal?.aborted) throw Error("Road loading cancelled");
@@ -460,11 +467,11 @@ export async function loadNetwork(a, b, notify = () => {}, signal, onRoadsReady 
       if (!Number.isFinite(routeDistance)) {
         throw Error("The shortest permitted A–B road route exceeds 10 km in the downloaded network.");
       }
-      // Retain 55 m road sampling whenever possible; on very large graphs
+      // Retain 110 m road sampling whenever possible; on very large graphs
       // gradually relax spacing rather than exhausting browser memory.
       const remaining = Math.max(1, MAX_DENSE_NODES - connected.nodes.length);
       const roadLength = connected.edges.reduce((sum, edge) => sum + edge.length, 0);
-      const spacing = Math.max(55, Math.ceil(roadLength / remaining));
+      const spacing = Math.max(ROAD_DEM_SPACING_METRES, Math.ceil(roadLength / remaining));
       graph = densifyRoadGraph(connected, spacing);
       graph.roadSource = data.source || "OpenStreetMap";
       graph.routeDistance = routeDistance;
