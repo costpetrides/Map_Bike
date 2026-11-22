@@ -1,7 +1,7 @@
 import { loadNetwork, distanceMetres, MAX_ROUTE_METRES } from "./network.mjs";
 import { createRoadCanvas } from "./road-canvas.mjs";
 import { initialiseSimulation, stepSimulation, SOURCE_CONCENTRATION } from "./physics.mjs";
-import { BASEMAP_STYLES, normaliseMapStyle } from "./map-style.mjs";
+import { BASEMAP_STYLES } from "./map-style.mjs";
 
 const $ = (id) => document.getElementById(id);
 const map = L.map("map", { zoomControl: false, preferCanvas: true }).setView([37.9802, 23.7395], 14);
@@ -13,67 +13,45 @@ const fallbackRaster = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.p
 
 // Keep the existing Leaflet raster map usable if the vector tiles/CDN fail.
 // Switching the basemap must not change A/B or the PDE solver's state.
+// Dark is the only supported basemap; there is no theme preference or switch.
+const selectedMapStyle = "dark";
 let basemap = null;
-let selectedMapStyle = "dark";
-try {
-  selectedMapStyle = normaliseMapStyle(localStorage.getItem("map-bike-style"));
-} catch {}
 
 function ensureFallbackRaster() {
   if (!map.hasLayer(fallbackRaster)) fallbackRaster.addTo(map);
   fallbackRaster.bringToBack();
 }
 
-function updateMapButtons() {
-  for (const name of ["positron", "dark"]) {
-    const button = document.getElementById(`style-${name}`);
-    button?.setAttribute("aria-pressed", String(selectedMapStyle === name));
+function initialiseDarkBasemap() {
+  if (typeof L.maplibreGL !== "function" ||
+      typeof window.maplibregl?.supported !== "function" ||
+      !window.maplibregl.supported()) {
+    ensureFallbackRaster();
+    return;
   }
-  const mapWrap = document.querySelector(".map-wrap");
-  if (mapWrap) mapWrap.dataset.basemap = selectedMapStyle;
-}
-
-function setMapStyle(nextStyle) {
-  selectedMapStyle = normaliseMapStyle(nextStyle);
-  updateMapButtons();
-  try { localStorage.setItem("map-bike-style", selectedMapStyle); } catch {}
-
-  if (typeof L.maplibreGL === "function" &&
-      typeof window.maplibregl?.supported === "function" &&
-      window.maplibregl.supported()) {
-    try {
-      ensureFallbackRaster();
-      if (!basemap) {
-        basemap = L.maplibreGL({
-          style: BASEMAP_STYLES[selectedMapStyle],
-          attribution: '&copy; <a href="https://openfreemap.org/">OpenFreeMap</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        }).addTo(map);
-        const gl = basemap.getMaplibreMap();
-        gl.on("idle", () => {
-          if (gl.areTilesLoaded() && map.hasLayer(fallbackRaster)) map.removeLayer(fallbackRaster);
-        });
-        gl.on("error", (event) => {
-          if (!gl.isStyleLoaded()) {
-            ensureFallbackRaster();
-            console.warn("Vector basemap unavailable; using raster fallback", event.error);
-          }
-        });
-      } else {
-        basemap.getMaplibreMap().setStyle(BASEMAP_STYLES[selectedMapStyle]);
+  try {
+    basemap = L.maplibreGL({
+      style: BASEMAP_STYLES.dark,
+      attribution: '&copy; <a href="https://openfreemap.org/">OpenFreeMap</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+    const gl = basemap.getMaplibreMap();
+    gl.on("idle", () => {
+      if (gl.areTilesLoaded() && map.hasLayer(fallbackRaster))
+        map.removeLayer(fallbackRaster);
+    });
+    gl.on("error", event => {
+      if (!gl.isStyleLoaded()) {
+        ensureFallbackRaster();
+        console.warn("Dark vector map unavailable; using dark raster fallback", event.error);
       }
-    } catch (error) {
-      console.warn("MapLibre basemap could not load; using raster fallback", error);
-      if (basemap && map.hasLayer(basemap)) map.removeLayer(basemap);
-      basemap = null;
-      ensureFallbackRaster();
-    }
-  } else {
+    });
+  } catch (error) {
+    console.warn("Dark vector map unavailable; using dark raster fallback", error);
+    if (basemap && map.hasLayer(basemap)) map.removeLayer(basemap);
+    basemap = null;
     ensureFallbackRaster();
   }
-  // Repaint both canvases without changing the numerical simulation.
-  roadCanvas.setTheme(selectedMapStyle);
 }
-
 
 const routeLayer = L.layerGroup().addTo(map);
 const pinLayer = L.layerGroup().addTo(map);
@@ -339,9 +317,9 @@ function completed() {
 }
 function tick(timestamp) {
   if (!running || !sim) return;
-  if (!previousFrame || timestamp - previousFrame >= 40) {
+  if (!previousFrame || timestamp - previousFrame >= 24) {
     previousFrame = timestamp;
-    const iterations = Math.round(Number($("speed").value) * 7);
+    const iterations = Math.round(Number($("speed").value) * 20);
     const deadline = performance.now() + 12;
     for (let i = 0; i < iterations && !sim.arrived && performance.now() < deadline; i++)
       stepSimulation(sim);
@@ -426,9 +404,6 @@ $("load").addEventListener("click", async () => {
   }
 });
 
-for (const name of ["positron", "dark"]) {
-  document.getElementById(`style-${name}`)?.addEventListener("click", () => setMapStyle(name));
-}
-setMapStyle(selectedMapStyle);
+initialiseDarkBasemap();
 updateControls();
 modelState("SELECT POINT A");
