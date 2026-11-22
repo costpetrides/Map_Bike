@@ -253,3 +253,27 @@ test("road range uses shortest legal directed distance, not a straight line", as
   assert.equal(shortestDirectedRoadDistance({ ...graph, start: 3, end: 0 }, MAX_ROUTE_METRES), Infinity);
   assert.equal(shortestDirectedRoadDistance(graph, 8000), Infinity);
 });
+
+test("wider road-search footprint uses bounded 1.4 km sections", async () => {
+  const { initialRoadSearchMarginMetres, ROAD_DEM_SPACING_METRES,
+    ROAD_GEOMETRY_SPACING_METRES, roadSearchCorridors, distanceMetres
+  } = await import("../network.mjs");
+  assert.equal(initialRoadSearchMarginMetres(1000), 250);
+  assert.equal(initialRoadSearchMarginMetres(10000), 520);
+  assert.equal(ROAD_GEOMETRY_SPACING_METRES, 140);
+  assert.equal(ROAD_DEM_SPACING_METRES, 110);
+  const a = { lat: 37.98, lng: 23.7 };
+  const b = { lat: 37.98, lng: 23.812 };
+  const distance = distanceMetres(a, b);
+  const sections = roadSearchCorridors(a, b, initialRoadSearchMarginMetres(distance));
+  assert.equal(sections.length, Math.ceil(distance / 1400));
+  assert.ok(sections.every(section => section.marginMetres >= 250));
+  for (let i = 1; i < sections.length; i++) {
+    const midpoint = {
+      lat: a.lat + (b.lat - a.lat) * i / sections.length,
+      lng: a.lng + (b.lng - a.lng) * i / sections.length
+    };
+    assert.ok(sections[i-1].contains(midpoint));
+    assert.ok(sections[i].contains(midpoint));
+  }
+});
