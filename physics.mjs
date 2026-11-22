@@ -4,7 +4,8 @@
 export const CELL_METRES = 50;
 export const SOURCE_CONCENTRATION = 2;
 export const DETECTION_CONCENTRATION = 0.035;
-export const DIFFUSIVITY = 2.5;
+export const DIFFUSIVITY = 8;
+export const GRADE_DRIFT_COEFFICIENT = 30;
 
 function exposeNode(sim, node) {
   for (const edgeIndex of sim.adjacency[node]) {
@@ -74,7 +75,7 @@ export function stepSimulation(sim) {
   }
   for (const edgeIndex of activeEdges) {
     const e = edges[edgeIndex];
-    const v = -14 * sim.terrainStrength * e.grade;
+    const v = -GRADE_DRIFT_COEFFICIENT * sim.terrainStrength * e.grade;
     const stiffness = 2 * DIFFUSIVITY * Math.max(c[e.a], c[e.b]) / e.h + Math.abs(v);
     rates[e.a] += stiffness / volumes[e.a];
     rates[e.b] += stiffness / volumes[e.b];
@@ -84,7 +85,7 @@ export function stepSimulation(sim) {
   const dt = Math.min(0.12, maxRate > 0 ? 0.28 / maxRate : 0.12);
   for (const edgeIndex of activeEdges) {
     const e = edges[edgeIndex], a = e.a, b = e.b;
-    const drift = -14 * sim.terrainStrength * e.grade;
+    const drift = -GRADE_DRIFT_COEFFICIENT * sim.terrainStrength * e.grade;
     let flux = -DIFFUSIVITY * (c[b] * c[b] - c[a] * c[a]) / e.h
       + drift * (drift >= 0 ? c[a] : c[b]);
     if ((flux > 0 && !e.forward) || (flux < 0 && !e.backward)) flux = 0;
