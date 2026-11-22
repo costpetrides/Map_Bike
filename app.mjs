@@ -317,10 +317,10 @@ function completed() {
 }
 function tick(timestamp) {
   if (!running || !sim) return;
-  if (!previousFrame || timestamp - previousFrame >= 24) {
+  if (!previousFrame || timestamp - previousFrame >= 18) {
     previousFrame = timestamp;
-    const iterations = Math.round(Number($("speed").value) * 20);
-    const deadline = performance.now() + 12;
+    const iterations = Math.round(Number($("speed").value) * 40);
+    const deadline = performance.now() + 18;
     for (let i = 0; i < iterations && !sim.arrived && performance.now() < deadline; i++)
       stepSimulation(sim);
     paint();
