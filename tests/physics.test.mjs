@@ -59,3 +59,22 @@ test("simulation stops once B reaches the operational concentration threshold", 
   stepSimulation(sim);
   assert.equal(sim.steps, previousSteps);
 });
+
+test("active-front solver initially visits only roads adjacent to A", () => {
+  const count = 400;
+  const net = {
+    nodes: Array.from({ length: count }, () => ({ elevation: 0 })),
+    edges: Array.from({ length: count - 1 }, (_, i) => ({
+      a: i, b: i + 1, length: 50, forward: true, backward: true
+    })),
+    start: 0, end: count - 1
+  };
+  const sim = initialiseSimulation(net, 0);
+  assert.equal(sim.activeEdges.length, 1);
+  assert.equal(sim.activeNodes.length, 2);
+  for (let i = 0; i < 20; i++) stepSimulation(sim);
+  assert.ok(sim.activeEdges.length < 40, "Distant dormant roads should not be integrated");
+  assert.equal(sim.concentration[count - 1], 0);
+  const total = sim.mass.reduce((sum, value) => sum + value, 0);
+  assert.ok(Math.abs(total - sim.injectedMass) < 1e-8);
+});
