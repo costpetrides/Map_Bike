@@ -388,7 +388,10 @@ $("load").addEventListener("click", async () => {
     $("elev-source").textContent = graph.elevationInfo.provider;
     resetSimulation();
     status(`Ready: ${graph.edges.length.toLocaleString()} segments from ${graph.roadSource}; ${graph.elevationInfo.count.toLocaleString()} DEM points. Start diffusion.`);
-    map.fitBounds([a, b], { padding: [80, 80], maxZoom: 16 });
+    // Show the loaded street footprint, not merely the straight A–B line.
+    const roadBounds = L.latLngBounds([[a.lat, a.lng], [b.lat, b.lng]]);
+    for (const node of graph.nodes) roadBounds.extend([node.lat, node.lng]);
+    map.fitBounds(roadBounds, { padding: [45, 45], maxZoom: 16 });
   } catch (error) {
     if (!loadingSignal.aborted) {
       modelState("DATA LOAD ERROR");
