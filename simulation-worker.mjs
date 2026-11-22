@@ -4,7 +4,7 @@ import { initialiseSimulation, stepSimulation } from "./physics.mjs";
 
 let sim = null;
 let running = false;
-let speed = 5;
+let speed = 10;
 let timer = null;
 let lastSnapshot = 0;
 const MAX_STEPS = 800000;
@@ -27,8 +27,8 @@ function pause() {
 function runSlice() {
   timer = null;
   if (!running || !sim) return;
-  const deadline = performance.now() + 12;
-  const maxIterations = Math.round(speed * 25);
+  const deadline = performance.now() + 16;
+  const maxIterations = Math.round(speed * 40);
   for (let i = 0; i < maxIterations && performance.now() < deadline; i++) {
     stepSimulation(sim);
     if (sim.arrived) {
@@ -44,15 +44,15 @@ function runSlice() {
       return;
     }
   }
-  if (performance.now() - lastSnapshot >= 90) snapshot();
-  if (running) timer = setTimeout(runSlice, 12);
+  if (performance.now() - lastSnapshot >= 65) snapshot();
+  if (running) timer = setTimeout(runSlice, speed >= 10 ? 0 : Math.round((10 - speed) * 1.2));
 }
 self.onmessage = ({ data }) => {
   try {
     if (data.type === "init") {
       pause();
       sim = initialiseSimulation(data.network, data.terrainStrength);
-      speed = Math.max(1, Math.min(20, data.speed || 5));
+      speed = Math.max(1, Math.min(40, data.speed || 10));
       snapshot();
     } else if (data.type === "start" && sim && !sim.arrived) {
       if (!running) {
@@ -63,7 +63,7 @@ self.onmessage = ({ data }) => {
       pause();
       snapshot();
     } else if (data.type === "speed") {
-      speed = Math.max(1, Math.min(20, data.value));
+      speed = Math.max(1, Math.min(40, data.value));
     }
   } catch (error) {
     pause();
