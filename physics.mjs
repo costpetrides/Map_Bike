@@ -102,7 +102,9 @@ export function stepSimulation(sim) {
     const newMass = Math.max(0, sim.mass[i] + changes[i]);
     sim.mass[i] = newMass;
     c[i] = newMass / volumes[i];
-    if (newMass > 0 && !sim.expandedFlags[i]) {
+    // Tiny round-off tails should not activate a whole 10 km city network
+    // before the physical concentration front has meaningfully propagated.
+    if (c[i] > 1e-8 && !sim.expandedFlags[i]) {
       sim.expandedFlags[i] = 1;
       exposeNode(sim, i);
     }
