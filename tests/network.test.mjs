@@ -230,9 +230,26 @@ test("long-distance road requests are chunked, merged, and preserve bicycle one-
   assert.ok(graph.start !== graph.end);
 });
 
-test("distances beyond the browser research budget fail clearly", async () => {
+test("destinations outside the 10 km circle fail before any download", async () => {
   await assert.rejects(
-    loadNetwork({ lat: 37.98, lng: 23.70 }, { lat: 38.28, lng: 23.70 }),
-    /at most 25 km/
+    loadNetwork({ lat: 37.98, lng: 23.70 }, { lat: 38.08, lng: 23.70 }),
+    /outside the 10 km straight-line radius/
   );
+});
+
+test("road range uses shortest legal directed distance, not a straight line", async () => {
+  const { shortestDirectedRoadDistance, MAX_ROUTE_METRES } = await import("../network.mjs");
+  assert.equal(MAX_ROUTE_METRES, 10000);
+  const graph = {
+    nodes: [{}, {}, {}, {}], start: 0, end: 3,
+    edges: [
+      { a: 0, b: 1, length: 3000, forward: true, backward: false },
+      { a: 1, b: 2, length: 3000, forward: true, backward: false },
+      { a: 2, b: 3, length: 3000, forward: true, backward: false },
+      { a: 0, b: 3, length: 12000, forward: true, backward: true }
+    ]
+  };
+  assert.equal(shortestDirectedRoadDistance(graph, MAX_ROUTE_METRES), 9000);
+  assert.equal(shortestDirectedRoadDistance({ ...graph, start: 3, end: 0 }, MAX_ROUTE_METRES), Infinity);
+  assert.equal(shortestDirectedRoadDistance(graph, 8000), Infinity);
 });
