@@ -1,6 +1,7 @@
-import { loadNetwork, distanceMetres } from "./network.mjs";
+import { loadNetwork, distanceMetres, MAX_ROUTE_METRES } from "./network.mjs";
+import { createRoadCanvas } from "./road-canvas.mjs";
 import { initialiseSimulation, stepSimulation, SOURCE_CONCENTRATION } from "./physics.mjs";
-import { BASEMAP_STYLES, normaliseMapStyle, fluidLineStyle } from "./map-style.mjs";
+import { BASEMAP_STYLES, normaliseMapStyle } from "./map-style.mjs";
 
 const $ = (id) => document.getElementById(id);
 const map = L.map("map", { zoomControl: false, preferCanvas: true }).setView([37.9802, 23.7395], 14);
@@ -69,23 +70,22 @@ function setMapStyle(nextStyle) {
   } else {
     ensureFallbackRaster();
   }
-  // Keep the simulation and its data; repaint just the presentation.
-  if (typeof lines !== "undefined" && lines.length) {
-    for (const line of lines) { line.ca = -1; line.cb = -1; }
-    paint();
-  }
+  // Repaint both canvases without changing the numerical simulation.
+  roadCanvas.setTheme(selectedMapStyle);
 }
 
 
-const roadLayer = L.layerGroup().addTo(map);
 const routeLayer = L.layerGroup().addTo(map);
 const pinLayer = L.layerGroup().addTo(map);
+const roadCanvas = createRoadCanvas(L, map, selectedMapStyle);
+let rangeCircle = null;
 const ATHENS_A = { lat: 37.97637, lng: 23.73946 };
 const ATHENS_B = { lat: 37.98147, lng: 23.74613 };
 
 let a = null, b = null, choosing = "a";
-let graph = null, sim = null, lines = [];
+let graph = null, sim = null, worker = null;
 let running = false, frameId = null, previousFrame = 0, loading = false, controller = null;
+let hasCompleted = false;
 
 function status(message, kind = "") {
   $("status").textContent = message;
@@ -103,11 +103,12 @@ function updateControls() {
   $("set-b").classList.toggle("selected", choosing === "b");
   $("a-state").textContent = formatPoint(a);
   $("b-state").textContent = formatPoint(b);
-  $("load").disabled = !loading && (!a || !b);
+  $("load").disabled = !loading && (!a || !b || distanceMetres(a, b) > MAX_ROUTE_METRES);
   $("load").textContent = loading ? "Cancel loading ✕" : "Load road network ↗";
   $("set-a").disabled = loading;
   $("set-b").disabled = loading;
   $("example").disabled = loading;
+  $("show-range").disabled = !a;
   $("simulate").disabled = !sim || loading || sim.arrived;
   $("restart").disabled = !sim || loading;
   $("simulate").textContent = sim?.arrived ? "Front reached B ✓" : running ? "Pause simulation ⏸" : "Start diffusion ▶";
@@ -125,9 +126,20 @@ function updatePins() {
   pinLayer.clearLayers();
   if (a) L.marker([a.lat, a.lng], { icon: pointIcon("A") }).addTo(pinLayer);
   if (b) L.marker([b.lat, b.lng], { icon: pointIcon("B") }).addTo(pinLayer);
+  if (rangeCircle) { map.removeLayer(rangeCircle); rangeCircle = null; }
+  if (a) {
+    rangeCircle = L.circle([a.lat, a.lng], {
+      radius: MAX_ROUTE_METRES, color: "#69cbb2", weight: 2,
+      dashArray: "8 7", fillColor: "#40bfa9", fillOpacity: 0.045,
+      interactive: false
+    }).addTo(map);
+  }
+  $("direct-distance").textContent = a && b
+    ? `${(distanceMetres(a, b) / 1000).toFixed(2)} km` : "—";
 }
 function stopLoop() {
   running = false;
+  if (worker) worker.postMessage({ type: "pause" });
   if (frameId != null) cancelAnimationFrame(frameId);
   frameId = null;
 }
@@ -136,13 +148,15 @@ function invalidateGraph() {
   if (controller) controller.abort();
   controller = null;
   loading = false;
+  if (worker) { worker.terminate(); worker = null; }
   graph = null;
   sim = null;
-  lines = [];
-  roadLayer.clearLayers();
+  hasCompleted = false;
+  roadCanvas.setGraph(null);
   routeLayer.clearLayers();
   $("trace").hidden = true;
   $("road-count").textContent = "—";
+  $("route-distance").textContent = "—";
   $("model-time").textContent = "—";
   $("elev-a").textContent = "—";
   $("elev-b").textContent = "—";
@@ -150,9 +164,15 @@ function invalidateGraph() {
   $("elev-source").textContent = "—";
 }
 function placePoint(which, latlng, invalidate = true) {
+  if (which === "b" && a && distanceMetres(a, latlng) > MAX_ROUTE_METRES) {
+    modelState("OUTSIDE 10 KM RANGE");
+    status("Destination B is outside the 10 km radius from A. Select a point inside the circle.", "error");
+    return;
+  }
   if (invalidate) invalidateGraph();
   if (which === "a") {
     a = { lat: latlng.lat, lng: latlng.lng };
+    if (b && distanceMetres(a, b) > MAX_ROUTE_METRES) b = null;
     choosing = "b";
   } else {
     b = { lat: latlng.lat, lng: latlng.lng };
@@ -177,7 +197,10 @@ $("example").addEventListener("click", () => {
   updatePins(); updateControls();
   map.fitBounds([a, b], { padding: [80, 90], maxZoom: 15 });
   modelState("READY TO LOAD ROADS");
-  status("Athens example selected. Load the streets to begin.");
+  status("Athens example selected. The dashed circle shows the 10 km straight-line range.");
+});
+$("show-range").addEventListener("click", () => {
+  if (rangeCircle) map.fitBounds(rangeCircle.getBounds(), { padding: [35, 35] });
 });
 $("terrain").addEventListener("input", () => {
   $("terrain-value").textContent = `${Number($("terrain").value).toFixed(2).replace(/\.00$/, ".0")}×`;
@@ -185,74 +208,91 @@ $("terrain").addEventListener("input", () => {
 });
 $("speed").addEventListener("input", () => {
   $("speed-value").textContent = `${$("speed").value}×`;
+  if (worker) worker.postMessage({ type: "speed", value: Number($("speed").value) });
 });
 
-function splitAtMidpoint(shape) {
-  if (!shape || shape.length < 2) return [shape, shape];
-  let total = 0;
-  for (let i = 1; i < shape.length; i++) {
-    total += distanceMetres({ lat: shape[i-1][0], lng: shape[i-1][1] }, { lat: shape[i][0], lng: shape[i][1] });
-  }
-  if (!total) return [[shape[0],shape[1]],[shape[0],shape[1]]];
-  let distance = 0;
-  const left = [shape[0]];
-  for (let i = 1; i < shape.length; i++) {
-    const segment = distanceMetres({ lat: shape[i-1][0], lng: shape[i-1][1] }, { lat: shape[i][0], lng: shape[i][1] });
-    if (distance + segment >= total / 2) {
-      const fraction = Math.min(1, Math.max(0, (total / 2 - distance) / segment));
-      const mid = [
-        shape[i-1][0] + (shape[i][0] - shape[i-1][0]) * fraction,
-        shape[i-1][1] + (shape[i][1] - shape[i-1][1]) * fraction
-      ];
-      left.push(mid);
-      return [left, [mid, ...shape.slice(i)]];
-    }
-    left.push(shape[i]);
-    distance += segment;
-  }
-  return [shape, shape.slice(-2)];
-}
-
 function addRoads() {
-  roadLayer.clearLayers();
   routeLayer.clearLayers();
-  lines = graph.edges.map((edge) => {
-    const [left, right] = splitAtMidpoint(edge.shape);
-    const style = { ...fluidLineStyle(0, selectedMapStyle), interactive: false };
-    const leftLine = L.polyline(left, style).addTo(roadLayer);
-    const rightLine = L.polyline(right, style).addTo(roadLayer);
-    return { leftLine, rightLine, ca: -1, cb: -1 };
-  });
+  roadCanvas.setGraph(graph);
 }
-function concentrationLevel(c) {
-  if (c < 0.002) return 0;
-  return Math.min(12, Math.max(1, Math.ceil(12 * Math.sqrt(c / SOURCE_CONCENTRATION))));
-}
-function styleFor(level) {
-  return fluidLineStyle(level, selectedMapStyle);
-}
-
 function paint() {
   if (!graph || !sim) return;
-  for (let i = 0; i < graph.edges.length; i++) {
-    const edge = graph.edges[i], visual = lines[i];
-    if (!visual) continue;
-    const ca = concentrationLevel(sim.concentration[edge.a]);
-    const cb = concentrationLevel(sim.concentration[edge.b]);
-    if (ca !== visual.ca) { visual.leftLine.setStyle(styleFor(ca)); visual.ca = ca; }
-    if (cb !== visual.cb) { visual.rightLine.setStyle(styleFor(cb)); visual.cb = cb; }
-  }
+  roadCanvas.render(sim.concentration, sim.activeEdges);
   $("model-time").textContent = `${sim.time.toFixed(1)} units`;
 }
 function resetSimulation() {
   if (!graph) return;
   stopLoop();
-  sim = initialiseSimulation(graph, Number($("terrain").value));
+  if (worker) { worker.terminate(); worker = null; }
+  hasCompleted = false;
   routeLayer.clearLayers();
   $("trace").hidden = true;
   $("model-time").textContent = "0.0 units";
   previousFrame = 0;
-  for (const line of lines) { line.ca = -1; line.cb = -1; }
+
+  // A dedicated worker keeps CPU-intensive numerical integration off the map
+  // thread. If unavailable, the same solver runs locally with a time budget.
+  if (typeof Worker === "function") {
+    try {
+      const instance = new Worker(new URL("./simulation-worker.mjs", import.meta.url), { type: "module" });
+      worker = instance;
+      sim = {
+        concentration: new Float32Array(graph.nodes.length), time: 0,
+        steps: 0, arrived: false, path: [], activeEdges: null
+      };
+      sim.concentration[graph.start] = SOURCE_CONCENTRATION;
+      instance.onmessage = ({ data }) => {
+        if (worker !== instance || !graph) return;
+        if (data.type === "frame") {
+          sim.concentration = data.concentration;
+          sim.time = data.time;
+          sim.steps = data.steps;
+          sim.arrived = data.arrived;
+          sim.path = data.path || [];
+          paint();
+          if (sim.arrived && !hasCompleted) {
+            hasCompleted = true;
+            completed();
+          }
+        } else if (data.type === "limit" || data.type === "error") {
+          stopLoop();
+          modelState(data.type === "limit" ? "SIMULATION LIMIT REACHED" : "SIMULATION ERROR");
+          status(data.message, "error");
+          updateControls();
+        }
+      };
+      instance.onerror = (event) => {
+        if (worker !== instance) return;
+        console.error("Simulation worker error", event);
+        stopLoop();
+        instance.terminate();
+        worker = null;
+        sim = initialiseSimulation(graph, Number($("terrain").value));
+        paint();
+        modelState("READY TO SIMULATE");
+        status("Background solver unavailable. Main-thread simulation is ready.");
+        updateControls();
+      };
+      const network = {
+        start: graph.start, end: graph.end,
+        nodes: graph.nodes.map(node => ({ elevation: node.elevation })),
+        edges: graph.edges.map(edge => ({
+          a: edge.a, b: edge.b, length: edge.length,
+          forward: edge.forward, backward: edge.backward
+        }))
+      };
+      instance.postMessage({
+        type: "init", network, terrainStrength: Number($("terrain").value),
+        speed: Number($("speed").value)
+      });
+    } catch (error) {
+      if (worker) { worker.terminate(); worker = null; }
+      console.warn("Simulation worker not available", error);
+      sim = initialiseSimulation(graph, Number($("terrain").value));
+    }
+  } else {
+    sim = initialiseSimulation(graph, Number($("terrain").value));
+  }
   paint();
   modelState("READY TO SIMULATE");
   status("Ready. Start diffusion to see the virtual fluid spreading.");
@@ -298,10 +338,12 @@ function tick(timestamp) {
   if (!previousFrame || timestamp - previousFrame >= 40) {
     previousFrame = timestamp;
     const iterations = Math.round(Number($("speed").value) * 7);
-    for (let i = 0; i < iterations && !sim.arrived; i++) stepSimulation(sim);
+    const deadline = performance.now() + 12;
+    for (let i = 0; i < iterations && !sim.arrived && performance.now() < deadline; i++)
+      stepSimulation(sim);
     paint();
     if (sim.arrived) { completed(); return; }
-    if (sim.steps > 180000 || sim.time > 12000) {
+    if (sim.steps > 800000 || sim.time > 50000) {
       stopLoop();
       modelState("SIMULATION LIMIT REACHED");
       status("No arrival at the selected threshold. Try reducing the elevation effect, or choose closer points.", "error");
@@ -322,7 +364,8 @@ $("simulate").addEventListener("click", () => {
     previousFrame = 0;
     modelState("DIFFUSION IN PROGRESS", true);
     status("Virtual fluid is propagating through the road network…");
-    frameId = requestAnimationFrame(tick);
+    if (worker) worker.postMessage({ type: "start" });
+    else frameId = requestAnimationFrame(tick);
   }
   updateControls();
 });
@@ -352,6 +395,7 @@ $("load").addEventListener("click", async () => {
       graph = loadedRoads;
       addRoads();
       $("road-count").textContent = graph.edges.length.toLocaleString();
+      $("route-distance").textContent = `${(graph.routeDistance / 1000).toFixed(2)} km`;
       modelState("ROADS LOADED · SAMPLING ELEVATION");
       status(`Roads loaded (${graph.edges.length.toLocaleString()} segments). Loading heights…`);
     });
