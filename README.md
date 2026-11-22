@@ -28,11 +28,12 @@ The app uses the **OpenFreeMap Dark** vector basemap only. There is no basemap s
 - MapLibre and its Leaflet adapter are loaded from pinned CDN versions.
 - Map appearance tests: `tests/map-style.test.mjs`.
 
-### Faster animation (November 2026)
+### Faster fluid and stronger terrain weighting (22 November 2026)
 
-- The default speed is **10×**, and the speed slider runs from **1× to 40×**.
-- The Web Worker uses longer computation batches and yields with minimal artificial delay at normal and high speeds. Rendering updates roughly every 65 ms instead of 90 ms.
-- The numerical update equations, direction restrictions, and 10 km road-distance cap are unchanged. Actual speedup depends on road density and device performance.
+- The animation now defaults to **20×** and can be adjusted from **1× to 80×**. At high settings, the Web Worker runs bounded 20 ms integration slices with minimal idle delay and redraws approximately every 50 ms; it does not block the main map thread.
+- The nonlinear diffusion coefficient increases from **2.5 to 8**, so the virtual fluid propagates faster in *model-time units*. The physical-slope drift coefficient increases from **14 to 30**, and the terrain slider now spans **0–12×** (default **6×**, previously 2×). The relative uphill/downhill influence is stronger, though steep uphill roads can still slow the front.
+- For faster *wall-clock* propagation along long roads, the numerical mesh uses roughly **110 m** DEM-sampled segments instead of 55 m, and non-junction way geometry is consolidated up to around **140 m**. Junctions, bicycle access and one-way restrictions remain intact.
+- Larger spatial steps trade away some resolution of short-lived hills and local road grades; this is an exploratory fast model, **not** a mesh-converged physical result. The 10 km route limit remains unchanged. Actual runtime is network- and device-dependent.
 
 ### How to use
 
@@ -54,13 +55,13 @@ The current version:
 - Allows up to 35 s per request (with a 35 s Overpass server-side limit) and explains whether a provider timed out, returned an HTTP error or failed at the network/CORS layer.
 - If the search is confined to a **very small** geographical region, attempts the independent OpenStreetMap API map endpoint as a last-resort fallback. Only roads and their referenced nodes are extracted from the XML, not buildings.
 - Cancels other pending requests when a valid response is obtained and reports which provider succeeded in the status panel.
-- Keeps the original narrow A–B corridor search, graph connectivity checks, road/elevation caching, and DEM sampling.
+- Keeps corridor-based road queries, graph connectivity checks, road/elevation caching, and DEM sampling, with a wider adaptive search area.
 
 **Important:** the public OpenStreetMap core API is primarily intended for map editing rather than repeated read-only extraction. This very small-area fallback is experimental and not a solution for high traffic, large distances or production deployment. A self-hosted extract service or hosted Overpass instance is required for robust long-term use. Public services may still fail or block cross-origin requests. No successful end-to-end Safari/online-API test has been confirmed.
 
 ### Longer point-to-point distances (November 2026)
 
-- The old 2.2 km / 25 km experiments are replaced by a **10 km road-route budget**, with a matching **10 km radius from A** drawn on the map. Longer A–B selections use small Overpass road-search corridors about 2.2 km long with overlapping end caps.
+- The old 2.2 km / 25 km experiments are replaced by a **10 km road-route budget**, with a matching **10 km radius from A** drawn on the map. Longer A–B selections use small Overpass road-search corridors about 1.4 km long with overlapping end caps.
 - At most **three corridor requests** run concurrently. Their OSM nodes and ways are deduplicated by ID before the usual directed, bicycle-accessible road graph is constructed; one-way rules remain in force.
 - The side-margin expansion runs if no connection is found or the only connected path exceeds 10 km. The densified graph has a 14,000-node budget; DEM spacing is adapted to stay within the available node budget.
 - Progress reports show completed road sections. Large or highly connected areas may still exceed the browser's graph/DEM budget, and public Overpass or terrain services can fail or rate-limit requests.
@@ -97,13 +98,13 @@ node --test tests/*.test.mjs
 
 The map does **not** download a fixed city-wide region. For each A–B pair it:
 
-1. Builds a four-corner polygon along A–B with a narrow **125–260 m initial side margin**, based on direct separation (not on map zoom). This removes unrelated streets in the corners of large rectangular requests.
+1. Builds a four-corner polygon along A–B with a wider **250–520 m initial side margin**, based on direct separation (not on map zoom). This removes unrelated streets in the corners of large rectangular requests.
 2. Requests only road ways inside this polygon, with full tags for eligibility and minimal node geometry. Clips extraneous portions of long roads on the client.
-3. Tries larger margins (**2×, then 3.5×**) only if a legal A–B road connection cannot be found. It does *not* unnecessarily broaden the search when a local connection exists.
+3. Tries larger margins (**1.5×, then 2.25×**) only if a legal A–B road connection cannot be found. It does *not* unnecessarily broaden the search when a local connection exists.
 4. Prunes graph portions unreachable in the permitted travel direction from A **before requesting elevations** or constructing the diffusion solver; other reachable branching streets remain.
-5. Caches up to four road responses (same search polygon) and previously requested DEM cells in memory, reducing repeat network requests.
+5. Caches up to twelve road responses (same search polygon) and previously requested DEM cells in memory, reducing repeat network requests.
 
-The narrow corridor is an **exploratory performance/coverage tradeoff**. It may omit longer detours and alternatives outside the corridor even when an in-corridor route exists. Accordingly, the simulation is not an exhaustive analysis of every possible A–B route. For a scientifically complete city-wide study, a wider user-controlled region or a boundary-aware expansion strategy is necessary.
+The wider corridor is still an **exploratory performance/coverage tradeoff**. It may omit longer detours and alternatives outside the corridor even when an in-corridor route exists. Accordingly, the simulation is not an exhaustive analysis of every possible A–B route. For a scientifically complete city-wide study, a wider user-controlled region or a boundary-aware expansion strategy is necessary.
 
 Endpoint snapping is restricted to nearby street nodes: a disconnected road hundreds of metres away cannot be silently substituted for B.
 
@@ -112,7 +113,7 @@ Endpoint snapping is restricted to nearby street nodes: a disconnected road hund
 The elevation pipeline was revised after comparing the related `costpetrides/map-to-gpx` implementation (`website/src/lib/utils.ts`):
 
 - Start from **OpenStreetMap road edges only**; neither buildings nor a rectangular field of off-road solver cells are constructed.
-- Subdivide existing road geometries at approximately **55 m** intervals, retaining their legal connectivity and directions.
+- Subdivide existing road geometries at approximately **110 m** intervals, retaining their legal connectivity and directions.
 - Download only the **Mapterhorn Terrarium-encoded DEM tiles** that contain at least one road sample (512×512 WebP tiles, zoom 12). Each tile covers surrounding buildings/terrain as raster imagery, but elevation values are read **only at sampled road coordinates**.
 - Use bilinear interpolation from nearby DEM pixels rather than rounding coordinates to ~130 m as before.
 - Reuse tiles in memory and through browser HTTP caching. When tile loading fails, request **exact road-point coordinates** from Open-Meteo as a fallback.
@@ -121,7 +122,7 @@ The elevation pipeline was revised after comparing the related `costpetrides/map
 
 The reference implementation is https://github.com/costpetrides/map-to-gpx/blob/main/website/src/lib/utils.ts . The public Mapterhorn tile format and address are documented at https://mapterhorn.com/data-access/ .
 
-**Important scientific limitation:** DEM represents source-dependent terrain/surface elevations, not necessarily the height of road surfaces at bridges, tunnels, multi-level roads, or tightly built-up areas. The raster tiles include surrounding buildings even though the model **does not sample buildings as separate locations**. The current 55 m sample spacing and zoom-12 data may smooth smaller changes in grade; do not interpret them as surveyed roadway profiles.
+**Important scientific limitation:** DEM represents source-dependent terrain/surface elevations, not necessarily the height of road surfaces at bridges, tunnels, multi-level roads, or tightly built-up areas. The raster tiles include surrounding buildings even though the model **does not sample buildings as separate locations**. The current ~110 m sample spacing and zoom-12 data may smooth smaller changes in grade; do not interpret them as surveyed roadway profiles.
 
 ### Physical model and important qualifications
 
@@ -131,7 +132,7 @@ $$
 \partial_t c=\partial_s\left[D_0\partial_s(c^2)+\mu c\,\partial_s z\right].
 $$
 
-The sign of elevation grade biases the flow uphill or downhill. In the current solver, the source at A is a **replenished reservoir**, not a one-time pulse. Each road segment is spatially approximated by the downloaded graph and the numerical time is in **model units**.
+The numerical model currently uses D₀ = 8 and a slope-drift coefficient of 30 multiplied by the terrain slider (0–12, default 6). The sign of elevation grade biases the flow uphill or downhill. In the current solver, the source at A is a **replenished reservoir**, not a one-time pulse. Each road segment is spatially approximated by the downloaded graph and the numerical time is in **model units**.
 
 For visible arrival the prototype uses a **finite concentration threshold** at B. This is an operational detection rule, not the exact mathematical free-boundary contact. The green trace is derived heuristically from predecessor fluxes: it is **not** a demonstrated shortest or fastest route. Before use as actual routing or any research claim, the solver requires mesh and timestep convergence checks, junction verification and further validation.
 
