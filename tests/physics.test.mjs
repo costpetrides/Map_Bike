@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { initialiseSimulation, stepSimulation } from "../physics.mjs";
+import { initialiseSimulation, stepSimulation, DIFFUSIVITY, GRADE_DRIFT_COEFFICIENT } from "../physics.mjs";
 
 function smallRoad(midElevation = 0, forward = true, backward = true) {
   return {
@@ -77,4 +77,19 @@ test("active-front solver initially visits only roads adjacent to A", () => {
   assert.equal(sim.concentration[count - 1], 0);
   const total = sim.mass.reduce((sum, value) => sum + value, 0);
   assert.ok(Math.abs(total - sim.injectedMass) < 1e-8);
+});
+
+test("faster nonlinear mobility and stronger terrain drift remain finite and conservative", () => {
+  assert.equal(DIFFUSIVITY, 8);
+  assert.equal(GRADE_DRIFT_COEFFICIENT, 30);
+  const down = runToContact(smallRoad(-5), 6);
+  const flat = runToContact(smallRoad(0), 6);
+  const up = runToContact(smallRoad(5), 6);
+  assert.ok(down.arrived && flat.arrived && up.arrived);
+  assert.ok(down.time < flat.time && flat.time < up.time);
+  for (const sim of [down, flat, up]) {
+    assert.ok(sim.concentration.every(c => c >= 0 && Number.isFinite(c)));
+    const sum = sim.mass.reduce((total, m) => total + m, 0);
+    assert.ok(Math.abs(sum - sim.injectedMass) < 1e-7);
+  }
 });
