@@ -39,7 +39,7 @@ MapLibre and its Leaflet adapter are loaded from a version-pinned CDN; these are
 4. Press **Start diffusion**. The line colours update as the concentration spreads. Pause and resume, adjust animation speed, or reset.
 5. When the numerical concentration threshold at B is reached, the simulation pauses and highlights a heuristic predecessor trace (when one can be reconstructed).
 
-Select A or B again to change points. For this proof of concept they must be **80 metres to 25 km apart (straight-line distance)**. Large networks and public service outages may cause an explicit loading error.
+Select A or B again to change points. For this proof of concept they must be **at least 80 metres apart**, with B inside the **10 km straight-line circle** centred on A. The shortest bicycle-permitted road path must independently be **at most 10 km**. A route outside either limit is rejected. Large networks and public service outages may still cause a loading error.
 
 ### Road API recovery (19 November 2026)
 
@@ -48,7 +48,7 @@ The previous loader failed after 16 s on each public Overpass endpoint; its `ove
 The current version:
 
 - Uses independent providers at `overpass.private.coffee` and `overpass.openstreetmap.fr`, started at different times to avoid a simultaneous surge.
-- Allows up to 45 s per request (with a 35 s Overpass server-side limit) and explains whether a provider timed out, returned an HTTP error or failed at the network/CORS layer.
+- Allows up to 35 s per request (with a 35 s Overpass server-side limit) and explains whether a provider timed out, returned an HTTP error or failed at the network/CORS layer.
 - If the search is confined to a **very small** geographical region, attempts the independent OpenStreetMap API map endpoint as a last-resort fallback. Only roads and their referenced nodes are extracted from the XML, not buildings.
 - Cancels other pending requests when a valid response is obtained and reports which provider succeeded in the status panel.
 - Keeps the original narrow A–B corridor search, graph connectivity checks, road/elevation caching, and DEM sampling.
@@ -57,11 +57,20 @@ The current version:
 
 ### Longer point-to-point distances (November 2026)
 
-- The former 2.2 km hard stop is replaced by a **25 km straight-line browser budget**. Routes above 2.2 km use multiple Overpass road-search corridors of about 1.8 km each, with overlapping endpoints so road junctions stay connected.
-- At most **two corridor requests** run concurrently. Their OSM nodes and ways are deduplicated by ID before the usual directed, bicycle-accessible road graph is constructed; one-way rules remain in force.
-- The existing side-margin expansion runs only when A and B cannot be connected. The maximum raw/densified graph budgets are larger, with a gradual increase in DEM sampling spacing for very dense networks to control browser memory.
+- The old 2.2 km / 25 km experiments are replaced by a **10 km road-route budget**, with a matching **10 km radius from A** drawn on the map. Longer A–B selections use small Overpass road-search corridors about 2.2 km long with overlapping end caps.
+- At most **three corridor requests** run concurrently. Their OSM nodes and ways are deduplicated by ID before the usual directed, bicycle-accessible road graph is constructed; one-way rules remain in force.
+- The side-margin expansion runs if no connection is found or the only connected path exceeds 10 km. The densified graph has a 14,000-node budget; DEM spacing is adapted to stay within the available node budget.
 - Progress reports show completed road sections. Large or highly connected areas may still exceed the browser's graph/DEM budget, and public Overpass or terrain services can fail or rate-limit requests.
-- These changes enable loading larger A–B selections; **they do not validate fast numerical arrival or optimal routing over long distances**. The diffusion solver still has finite simulation limits.
+- Road range is checked by a shortest-path computation that respects bicycle one-way tags. This distance validation does not make the **fluid-derived green trace** an optimal route. The nonlinear PDE simulation still has a finite time/step budget.
+
+### 10 km simulation optimisation (22 November 2026)
+
+- When point **A** is placed, the map frames its dashed 10 km straight-line circle. Use **Show 10 km range** to return to the full extent after zooming.
+- A quick great-circle check rejects B outside this circle. A directed Dijkstra search then validates that the downloaded legal road route is no more than 10 km (one-way restrictions apply).
+- The road layer uses **two HTML canvas elements** instead of two Leaflet polylines per segment. A static pass draws roads once per map view; only reached roads receive a dynamic fluid overlay. Rendering is clipped to the viewport and colours are still blue to turquoise.
+- The finite-volume solver tracks **active nodes and edges** instead of scanning every dormant road at every timestep. Negligible numerical tails do not expand the active set.
+- A **Web Worker** advances the model in time-budgeted slices and transfers display snapshots, keeping the Leaflet map responsive. A main-thread fallback remains for older browsers.
+- The animation caps are 800,000 numerical steps and 50,000 model-time units. A route can still take time to simulate; performance is device- and road-network-dependent. Public Overpass/DEM availability is outside the app's control.
 
 ### Faster road-data loading (November 2026)
 
@@ -85,7 +94,7 @@ node --test tests/*.test.mjs
 
 The map does **not** download a fixed city-wide region. For each A–B pair it:
 
-1. Builds a four-corner polygon along A–B with a narrow **125–320 m initial side margin**, based on direct separation (not on map zoom). This removes unrelated streets in the corners of large rectangular requests.
+1. Builds a four-corner polygon along A–B with a narrow **125–260 m initial side margin**, based on direct separation (not on map zoom). This removes unrelated streets in the corners of large rectangular requests.
 2. Requests only road ways inside this polygon, with full tags for eligibility and minimal node geometry. Clips extraneous portions of long roads on the client.
 3. Tries larger margins (**2×, then 3.5×**) only if a legal A–B road connection cannot be found. It does *not* unnecessarily broaden the search when a local connection exists.
 4. Prunes graph portions unreachable in the permitted travel direction from A **before requesting elevations** or constructing the diffusion solver; other reachable branching streets remain.
