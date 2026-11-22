@@ -180,6 +180,10 @@ function placePoint(which, latlng, invalidate = true) {
   }
   updatePins();
   updateControls();
+  // On choosing A, frame the full circle so the 10 km reach is immediately visible.
+  if (which === "a" && rangeCircle) {
+    map.fitBounds(rangeCircle.getBounds(), { padding: [35, 35] });
+  }
   if (a && b) {
     modelState("READY TO LOAD ROADS");
     status("Points selected. Load the road network and elevation data.");
