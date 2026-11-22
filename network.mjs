@@ -11,12 +11,14 @@ const roadCache = new Map();
 const MAX_ROAD_CACHE = 4;
 // Longer journeys use bounded, overlapping Overpass polygons instead of
 // requesting a single large city-scale extract.
-const ROAD_CHUNK_METRES = 1800;
-const MAX_DIRECT_METRES = 25000;
+const ROAD_CHUNK_METRES = 2200;
+export const MAX_ROUTE_METRES = 10000;
+const MAX_DIRECT_METRES = MAX_ROUTE_METRES;
 const MAX_GRAPH_NODES = 20000;
 const MAX_GRAPH_EDGES = 28000;
-const MAX_DENSE_NODES = 40000;
-const MAX_DENSE_EDGES = 52000;
+// Cap the DEM and solver footprint: longer corridors adaptively use coarser cells.
+const MAX_DENSE_NODES = 14000;
+const MAX_DENSE_EDGES = 28000;
 const ROAD_PATTERN = "^(residential|living_street|tertiary|secondary|primary|unclassified|service|cycleway|path|footway|pedestrian|track|road)$";
 const HIGHWAYS = /^(residential|living_street|tertiary|secondary|primary|unclassified|service|cycleway|path|footway|pedestrian|track|road)$/;
 const DEG = Math.PI / 180;
@@ -101,11 +103,11 @@ async function requestRoads(corridor, signal, notify = () => {}) {
   // Delayed independent providers avoid a sudden burst of identical requests.
   for (const [index, url] of OVERPASS.entries()) {
     attempts.push((async () => {
-      if(index>0)await pause(5000*index);
+      if(index>0)await pause(2500*index);
       if(localAbort.signal.aborted || signal?.aborted)throw Error("Request cancelled");
       notify(index===0 ? "Querying roads from Overpass…" :
         "First Overpass slow — trying a different data provider…");
-      const timeout = AbortSignal.timeout(45000);
+      const timeout = AbortSignal.timeout(35000);
       const signals=[localAbort.signal,timeout];
       if(signal)signals.push(signal);
       try {
@@ -124,7 +126,7 @@ async function requestRoads(corridor, signal, notify = () => {}) {
         return data;
       } catch(error) {
         if(signal?.aborted)throw Error("User cancelled loading");
-        if(timeout.aborted)throw Error(`${new URL(url).host}: timed out after 45 seconds`);
+        if(timeout.aborted)throw Error(`${new URL(url).host}: timed out after 35 seconds`);
         throw Error(`${new URL(url).host}: ${error.message||"network/CORS failure"}`);
       }
     })());
@@ -177,7 +179,7 @@ async function requestSegmentedRoads(a, b, marginMetres, signal, notify) {
   const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   const responses = new Array(corridors.length);
   let next = 0, completed = 0;
-  notify(`Downloading ${corridors.length} small road sections (2 at a time)…`);
+  notify(`Downloading ${corridors.length} small road sections (up to 3 at a time)…`);
   async function worker() {
     while (next < corridors.length) {
       if (combined.aborted) throw Error("Road loading cancelled");
@@ -189,7 +191,7 @@ async function requestSegmentedRoads(a, b, marginMetres, signal, notify) {
     }
   }
   try {
-    await Promise.all(Array.from({ length: Math.min(2, corridors.length) }, () => worker()));
+    await Promise.all(Array.from({ length: Math.min(3, corridors.length) }, () => worker()));
     if (combined.aborted) throw Error("Road loading cancelled");
   } catch (error) {
     controller.abort();
@@ -313,6 +315,63 @@ function chooseEndpoints(net, a, b) {
   net.start = choice.start; net.end = choice.end;
 }
 
+// Dijkstra on the directed bike-accessible graph. The straight-line circle is
+// visual guidance; this validates the actual permitted road distance.
+export function shortestDirectedRoadDistance(net, maxMetres = Infinity) {
+  const adjacency = Array.from({ length: net.nodes.length }, () => []);
+  for (const edge of net.edges) {
+    if (edge.forward) adjacency[edge.a].push([edge.b, edge.length]);
+    if (edge.backward) adjacency[edge.b].push([edge.a, edge.length]);
+  }
+  const distances = new Float64Array(net.nodes.length).fill(Infinity);
+  const heap = [];
+  function push(node, distance) {
+    let i = heap.length;
+    heap.push([distance, node]);
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (heap[parent][0] <= distance) break;
+      heap[i] = heap[parent];
+      i = parent;
+    }
+    heap[i] = [distance, node];
+  }
+  function pop() {
+    const first = heap[0];
+    const last = heap.pop();
+    if (heap.length) {
+      let i = 0;
+      while (true) {
+        const left = 2 * i + 1;
+        if (left >= heap.length) break;
+        const right = left + 1;
+        const child = right < heap.length && heap[right][0] < heap[left][0] ? right : left;
+        if (last[0] <= heap[child][0]) break;
+        heap[i] = heap[child];
+        i = child;
+      }
+      heap[i] = last;
+    }
+    return first;
+  }
+  distances[net.start] = 0;
+  push(net.start, 0);
+  while (heap.length) {
+    const [distance, node] = pop();
+    if (distance !== distances[node]) continue;
+    if (distance > maxMetres) return Infinity;
+    if (node === net.end) return distance;
+    for (const [next, length] of adjacency[node]) {
+      const candidate = distance + length;
+      if (candidate < distances[next]) {
+        distances[next] = candidate;
+        push(next, candidate);
+      }
+    }
+  }
+  return Infinity;
+}
+
 // Unreachable components can never receive fluid from A. Remove them before
 // requesting DEM heights or allocating the numerical solver.
 export function pruneUnreachable(net) {
@@ -381,10 +440,10 @@ export function densifyRoadGraph(graph, maxSpacingMetres = 55) {
 export async function loadNetwork(a, b, notify = () => {}, signal, onRoadsReady = () => {}) {
   const direct = distanceMetres(a, b);
   if (direct < 80) throw Error("Choose A and B at least 80 metres apart.");
-  if (direct > MAX_DIRECT_METRES) throw Error("For now, choose points at most 25 km apart (straight-line distance).");
+  if (direct > MAX_DIRECT_METRES) throw Error("B is outside the 10 km straight-line radius from A.");
   // Adaptive, narrow corridor around A–B. Long corridors are split into
   // short requests; expand sideways only when the legal roads do not connect.
-  const baseMargin = Math.max(125, Math.min(320, 95 + direct * 0.11));
+  const baseMargin = Math.max(125, Math.min(260, 95 + direct * 0.027));
   const multipliers = [1, 2, 3.5];
   let graph = null;
   for (let attempt = 0; attempt < multipliers.length; attempt++) {
@@ -397,6 +456,10 @@ export async function loadNetwork(a, b, notify = () => {}, signal, onRoadsReady 
       const candidate = fromOverpass(data, corridor);
       chooseEndpoints(candidate, a, b);
       const connected = pruneUnreachable(candidate);
+      const routeDistance = shortestDirectedRoadDistance(connected, MAX_ROUTE_METRES);
+      if (!Number.isFinite(routeDistance)) {
+        throw Error("The shortest permitted A–B road route exceeds 10 km in the downloaded network.");
+      }
       // Retain 55 m road sampling whenever possible; on very large graphs
       // gradually relax spacing rather than exhausting browser memory.
       const remaining = Math.max(1, MAX_DENSE_NODES - connected.nodes.length);
@@ -404,12 +467,14 @@ export async function loadNetwork(a, b, notify = () => {}, signal, onRoadsReady 
       const spacing = Math.max(55, Math.ceil(roadLength / remaining));
       graph = densifyRoadGraph(connected, spacing);
       graph.roadSource = data.source || "OpenStreetMap";
+      graph.routeDistance = routeDistance;
       break;
     } catch (error) {
-      if (!/No bicycle-accessible roads|Could not connect A and B|too far from a bicycle-accessible road|A and B are not connected/i.test(error.message)) {
+      if (!/No bicycle-accessible roads|Could not connect A and B|too far from a bicycle-accessible road|A and B are not connected|road route exceeds 10 km/i.test(error.message)) {
         throw error;
       }
       if (attempt === multipliers.length - 1) {
+        if (/road route exceeds 10 km/i.test(error.message)) throw error;
         throw Error("No connected A–B road network found after expanding the search. Try different points.");
       }
       notify("No connection in this corridor — expanding the road search…");
