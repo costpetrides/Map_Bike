@@ -29,7 +29,11 @@
         <button id="set-a" class="point-button selected" type="button"><span class="point-dot a">A</span><span>Set start</span><small id="a-state">Click map</small></button>
         <button id="set-b" class="point-button" type="button"><span class="point-dot b">B</span><span>Set destination</span><small id="b-state">Click map</small></button>
       </div>
-      <button class="subtle-button" id="example" type="button">Use example points in Athens</button>
+      <div class="point-actions">
+        <button class="subtle-button" id="example" type="button">Use example points in Athens</button>
+        <button class="subtle-button" id="show-range" type="button" disabled>Show 10 km range</button>
+      </div>
+      <p class="range-help">The dashed circle is 10 km from A as the crow flies. The permitted road route must also be no more than 10 km.</p>
       <button id="load" class="primary-button" type="button" disabled>Load road network <span>↗</span></button>
     </section>
     <section class="section">
@@ -52,6 +56,8 @@
       <div class="stat-grid">
         <div><span>Model time</span><strong id="model-time">—</strong></div>
         <div><span>Road segments</span><strong id="road-count">—</strong></div>
+        <div><span>A–B straight line</span><strong id="direct-distance">—</strong></div>
+        <div><span>Shortest legal road route</span><strong id="route-distance">—</strong></div>
         <div><span>A elevation</span><strong id="elev-a">—</strong></div>
         <div><span>B elevation</span><strong id="elev-b">—</strong></div>
         <div><span>DEM samples</span><strong id="elev-count">—</strong></div>
@@ -71,7 +77,7 @@
       <button id="style-positron" type="button" aria-pressed="false">Positron</button>
       <button id="style-dark" type="button" aria-pressed="true">Dark</button>
     </div>
-    <div class="map-key" aria-label="Diffusion legend"><span class="key-line inactive"></span> Road <span class="key-line active"></span> <span>Fluid (blue → turquoise)</span> <span class="key-line route"></span> Inferred trace</div>
+    <div class="map-key" aria-label="Diffusion legend"><span class="key-line inactive"></span> Road <span class="key-line active"></span> <span>Fluid (blue → turquoise)</span> <span class="key-line route"></span> Inferred trace <span class="key-line radius"></span> 10 km radius from A</div>
   </main>
 </div>
 <noscript>Enable JavaScript to use the map and simulation.</noscript>
