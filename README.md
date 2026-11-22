@@ -20,16 +20,19 @@ python3 -m http.server 8000
 
 Open http://localhost:8000 in your browser. Opening `index.html` as a `file://` URL may block ES modules.
 
-### Map appearance: Positron / Dark
+### Map appearance: Dark only
 
-Use the **Positron** and **Dark** buttons above the map to change the basemap without restarting diffusion. Dark is the default and the choice is remembered locally when the browser allows localStorage. The simulated fluid uses a **blue-to-turquoise** intensity palette, while the inferred route is green.
+The app uses the **OpenFreeMap Dark** vector basemap only. There is no basemap switch or locally remembered light preference. If WebGL or the vector-tile service is unavailable, the OpenStreetMap raster fallback is restyled dark. The simulated fluid remains blue-to-turquoise, and the inferred trace remains green.
 
-- Basemaps: [OpenFreeMap](https://openfreemap.org/quick_start/) vector styles \`positron\` and \`dark\`, rendered through MapLibre GL and its Leaflet adapter; no API key.
-- If MapLibre/WebGL or the vector tiles cannot load, the app retains the original OpenStreetMap raster layer and applies a light or dark, desaturated presentation as a fallback. The fallback resembles the selected style but is not the original Positron/Dark vector map.
-- Changing style only updates map presentation and road colours; the A/B points, downloaded network, elevation samples and diffusion state remain unchanged.
-- © OpenFreeMap; map data © OpenStreetMap contributors. Keep attribution visible.
+- Map data © OpenStreetMap contributors; vector tiles © OpenFreeMap. Attribution remains visible.
+- MapLibre and its Leaflet adapter are loaded from pinned CDN versions.
+- Map appearance tests: `tests/map-style.test.mjs`.
 
-MapLibre and its Leaflet adapter are loaded from a version-pinned CDN; these are optional for the basemap and do not replace the app's Leaflet overlays. Tests: \`tests/map-style.test.mjs\`.
+### Faster animation (November 2026)
+
+- The default speed is **10×**, and the speed slider runs from **1× to 40×**.
+- The Web Worker uses longer computation batches and yields with minimal artificial delay at normal and high speeds. Rendering updates roughly every 65 ms instead of 90 ms.
+- The numerical update equations, direction restrictions, and 10 km road-distance cap are unchanged. Actual speedup depends on road density and device performance.
 
 ### How to use
 
