@@ -71,3 +71,14 @@ button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #9cdb
   .basemap-switch{top:54px;left:12px;padding:3px}
   .basemap-switch button{min-height:29px;padding:6px 11px;font-size:11px}
 }
+
+/* Range control and legend are kept compact on phone and desktop. */
+.point-actions{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.point-actions .subtle-button{margin:13px 0 6px;white-space:nowrap}
+.range-help{margin:0 0 14px;font-size:10px;line-height:1.5;color:#8ba5ad}
+.key-line.radius{height:0;border-top:2px dashed #69cbb2;width:22px}
+.road-canvas{position:absolute;pointer-events:none!important}
+@media(max-width:650px){
+  .point-actions .subtle-button{font-size:11px;margin:10px 0 6px}
+  .range-help{font-size:10px;margin-bottom:10px}
+}
