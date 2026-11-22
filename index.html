@@ -41,8 +41,8 @@
       <label class="range-label" for="terrain"><span>Elevation effect</span><output id="terrain-value">2.0×</output></label>
       <input id="terrain" type="range" min="0" max="5" step="0.25" value="2">
       <div class="range-ends"><span>Flat model</span><span>Stronger slope drift</span></div>
-      <label class="range-label second" for="speed"><span>Animation speed</span><output id="speed-value">5×</output></label>
-      <input id="speed" type="range" min="1" max="20" step="1" value="5">
+      <label class="range-label second" for="speed"><span>Animation speed</span><output id="speed-value">10×</output></label>
+      <input id="speed" type="range" min="1" max="40" step="1" value="10">
       <div class="range-ends"><span>Slower</span><span>Faster</span></div>
       <p class="formula">∂ₜc = ∂ₛ[D₀ ∂ₛ(c²) + μc ∂ₛz]</p>
     </section>
@@ -70,13 +70,9 @@
       <p>Roads © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors. Elevation: <a href="https://mapterhorn.com/attribution/" target="_blank" rel="noopener noreferrer">Mapterhorn</a> DEM; Open-Meteo fallback. <a href="https://github.com/costpetrides/Map_Bike" target="_blank" rel="noopener noreferrer">Source ↗</a></p>
     </footer>
   </aside>
-  <main class="map-wrap" aria-label="Live diffusion map">
+  <main class="map-wrap" data-basemap="dark" aria-label="Live diffusion map">
     <div id="map"></div>
     <div class="map-topnote"><span class="live-led"></span><span id="map-mode">SELECT POINT A</span></div>
-    <div class="basemap-switch" role="group" aria-label="Map style">
-      <button id="style-positron" type="button" aria-pressed="false">Positron</button>
-      <button id="style-dark" type="button" aria-pressed="true">Dark</button>
-    </div>
     <div class="map-key" aria-label="Diffusion legend"><span class="key-line inactive"></span> Road <span class="key-line active"></span> <span>Fluid (blue → turquoise)</span> <span class="key-line route"></span> Inferred trace <span class="key-line radius"></span> 10 km radius from A</div>
   </main>
 </div>
